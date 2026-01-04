@@ -11,7 +11,7 @@
     "build": "ng build",
     "electron": "ng build && electron .",
     "package": "ng build && electron-forge package",
-    "make": "ng build && electron-forge make -p win32"
+    "make": "ng build && electron-forge make"
   },
   "private": true,
   "dependencies": {
