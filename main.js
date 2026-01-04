@@ -38,8 +38,10 @@ function createWindow() {
       enableRemoteModule: false,
     }
   });
-  const _ = win.loadURL("http://localhost:4200");
-  
+  win.loadFile("dist/angular20/browser/index.html")
+    .then(value => console.log("successfully loaded index:", value))
+    .catch(value => console.log("error loading index:", value));
+
   // Close game when window closes
   win.on('close', () => {
     // Close the game process if running
@@ -52,7 +54,7 @@ function createWindow() {
       }
       gameProcess = null;
     }
-    
+
     // Notify the other PC to close their game
     if (isClient && clientSocket && clientSocket.connected) {
       clientSocket.emit('closeGame');
@@ -60,7 +62,7 @@ function createWindow() {
       serverSocket.sockets.emit('closeGame');
     }
   });
-  
+
   return win;
 }
 
@@ -85,7 +87,7 @@ function closeGameAndNotify() {
     }
     gameProcess = null;
   }
-  
+
   // Notify the other PC
   if (isClient && clientSocket && clientSocket.connected) {
     clientSocket.emit('closeGame');
@@ -174,7 +176,7 @@ ipcMain.on('closeGame', () => {
     }
     gameProcess = null;
   }
-  
+
   // Notify the other PC
   if (isClient && clientSocket && clientSocket.connected) {
     clientSocket.emit('closeGame');
@@ -193,7 +195,7 @@ ipcMain.handle('createWsServer', async (event, port) => {
     isServer = true;
     isClient = false;
     connectionStatus = 'server';
-    
+
     serverSocket.on('connection', (cs) => {
       console.log('New client connected');
 
@@ -208,7 +210,7 @@ ipcMain.handle('createWsServer', async (event, port) => {
         // Broadcast to all clients
         serverSocket.sockets.emit('launchGame', gameIndex);
       });
-      
+
       cs.on('closeGame', () => {
         console.log('Server: Client requested game close - closing server game and notifying all clients');
         if (gameProcess) {
@@ -251,7 +253,7 @@ ipcMain.handle('createWsServer', async (event, port) => {
         // Broadcast to all clients (including the one that sent it, but that's okay)
         serverSocket.sockets.emit('closeGame');
       });
-      
+
       cs.on('disconnect', () => {
         console.log('Client disconnected');
       });
@@ -273,20 +275,20 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
       reconnectionDelay: 1000,
       reconnectionAttempts: 5
     });
-    
+
     isClient = true;
     isServer = false;
     connectionStatus = 'client';
-    
+
     clientSocket.on('connect', () => {
       console.log('Connected to server');
     });
-    
+
     clientSocket.on('launchGame', (gameIndex) => {
       console.log('Client: received launchGame command - launching client batch with index', gameIndex);
       launchGame(gameIndex);
     });
-    
+
     clientSocket.on('closeGame', () => {
       console.log('Client: received closeGame command - closing game');
       if (gameProcess) {
@@ -330,16 +332,16 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
         console.log('Client: No game process to close');
       }
     });
-    
+
     clientSocket.on('disconnect', () => {
       console.log('Disconnected from server');
       connectionStatus = 'disconnected';
     });
-    
+
     clientSocket.on('connect_error', (error) => {
       console.error('Connection error:', error);
     });
-    
+
     return {success: true, url };
   } catch (error) {
     console.error('Error connecting:', error);
@@ -382,10 +384,10 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
       timeout: 2000,
       reconnection: false
     });
-    
+
     return new Promise((resolve) => {
       let resolved = false;
-      
+
       const connectAsClient = async () => {
         try {
           console.log('Connecting to', targetUrl);
@@ -395,20 +397,20 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
             reconnectionDelay: 1000,
             reconnectionAttempts: 5
           });
-          
+
           isClient = true;
           isServer = false;
           connectionStatus = 'client';
-          
+
           clientSocket.on('connect', () => {
             console.log('Connected to server');
           });
-          
+
           clientSocket.on('launchGame', (gameIndex) => {
             console.log('Client: received launchGame command with index', gameIndex);
             launchGame(gameIndex);
           });
-          
+
           clientSocket.on('closeGame', () => {
             console.log('Client: received closeGame command');
             if (gameProcess) {
@@ -420,23 +422,23 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
               gameProcess = null;
             }
           });
-          
+
           clientSocket.on('disconnect', () => {
             console.log('Disconnected from server');
             connectionStatus = 'disconnected';
           });
-          
+
           clientSocket.on('connect_error', (error) => {
             console.error('Connection error:', error);
           });
-          
+
           return {success: true, url: targetUrl };
         } catch (error) {
           console.error('Error connecting:', error);
           return {success: false, error: error.message };
         }
       };
-      
+
       const createAsServer = async () => {
         try {
           serverSocket = new Server(port, {
@@ -448,7 +450,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
           isServer = true;
           isClient = false;
           connectionStatus = 'server';
-          
+
           serverSocket.on('connection', (cs) => {
             console.log('New client connected');
 
@@ -462,7 +464,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
               launchGame(gameIndex);
               serverSocket.sockets.emit('launchGame', gameIndex);
             });
-            
+
             cs.on('closeGame', () => {
               console.log('Server: Client requested game close - closing server game and notifying all clients');
               if (gameProcess) {
@@ -501,7 +503,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
               }
               serverSocket.sockets.emit('closeGame');
             });
-            
+
             cs.on('disconnect', () => {
               console.log('Client disconnected');
             });
@@ -513,7 +515,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
           return { success: false, error: error.message };
         }
       };
-      
+
       testSocket.on('connect', async () => {
         if (resolved) return;
         resolved = true;
@@ -522,7 +524,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
         const result = await connectAsClient();
         resolve({ success: true, role: 'client', ...result });
       });
-      
+
       testSocket.on('connect_error', async () => {
         if (resolved) return;
         resolved = true;
@@ -531,7 +533,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
         const result = await createAsServer();
         resolve({ success: true, role: 'server', ...result });
       });
-      
+
       setTimeout(async () => {
         if (resolved) return;
         resolved = true;
@@ -553,7 +555,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
       isServer = true;
       isClient = false;
       connectionStatus = 'server';
-      
+
       serverSocket.on('connection', (cs) => {
         console.log('New client connected');
 
@@ -567,7 +569,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
           launchGame(gameIndex);
           serverSocket.sockets.emit('launchGame', gameIndex);
         });
-        
+
         cs.on('closeGame', () => {
           console.log('Server: Client requested game close - closing server game and notifying all clients');
           if (gameProcess) {
@@ -606,7 +608,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
           }
           serverSocket.sockets.emit('closeGame');
         });
-        
+
         cs.on('disconnect', () => {
           console.log('Client disconnected');
         });
@@ -670,23 +672,23 @@ async function launchGame(gameIndex){
     detached: false
   });
   console.log('Launched game process with PID:', gameProcess.pid);
-  
+
   gameProcess.on('error', (error) => {
     console.error("Error running executable:", error);
     gameProcess = null;
   });
-  
+
   gameProcess.on('exit', (code, signal) => {
     console.log(`Game process exited with code ${code} and signal ${signal}`);
     const wasGameProcess = gameProcess;
     gameProcess = null;
-    
+
     // Clear monitoring interval
     if (processMonitorInterval) {
       clearInterval(processMonitorInterval);
       processMonitorInterval = null;
     }
-    
+
     // Notify the other PC that game closed
     if (isClient && clientSocket && clientSocket.connected) {
       console.log('Client: Game closed - notifying server');
@@ -696,14 +698,14 @@ async function launchGame(gameIndex){
       serverSocket.sockets.emit('closeGame');
     }
   });
-  
+
   // Monitor process on Windows - check if game process still exists
   if (process.platform === 'win32') {
     // Clear any existing monitor
     if (processMonitorInterval) {
       clearInterval(processMonitorInterval);
     }
-    
+
     processMonitorInterval = setInterval(() => {
       if (gameProcess) {
         try {
@@ -718,7 +720,7 @@ async function launchGame(gameIndex){
             clearInterval(processMonitorInterval);
             processMonitorInterval = null;
           }
-          
+
           // Notify the other PC to close their game
           if (isClient && clientSocket && clientSocket.connected) {
             console.log('Client: Game closed externally - notifying server');
@@ -752,7 +754,7 @@ async function getFilesOfGameDirectory(){
   } else {
     directory = path.join(os.homedir(), '.local');
   }
-  
+
   const files = [];
   try {
     const directoryFiles = await fs.readdir(directory);
@@ -771,7 +773,7 @@ async function getFilesOfGameDirectory(){
   } catch (e) {
     console.error('Error reading directory:', e);
   }
-  
+
   gameFiles = files;
   return files;
 }
