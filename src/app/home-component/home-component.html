@@ -14,19 +14,19 @@
   </div>
 
   <div class="main-actions">
-    <button 
-      class="play-button" 
-      [class.disabled]="!isConnected()" 
-      [disabled]="!isConnected()" 
+    <button
+      class="play-button"
+      [class.disabled]="!isConnected()"
+      [disabled]="!isConnected()"
       (click)="launchGame()">
       <span class="button-icon">▶️</span>
       <span class="button-text">Play Random Game</span>
     </button>
-    
-    <button 
-      class="close-button" 
-      [class.disabled]="!isConnected()" 
-      [disabled]="!isConnected()" 
+
+    <button
+      class="close-button"
+      [class.disabled]="!isConnected()"
+      [disabled]="!isConnected()"
       (click)="closeGame()">
       <span class="button-icon">⏹️</span>
       <span class="button-text">Close Game</span>
@@ -35,60 +35,63 @@
 
   <div class="connection-panel">
     <h2 class="panel-title">Connection Settings</h2>
-    
+
     <div class="input-group">
       <label for="serverUrl">Server Address:</label>
-      <input 
-        id="serverUrl" 
-        type="text" 
-        [(ngModel)]="serverUrl" 
+      <input
+        id="serverUrl"
+        type="text"
+        [(ngModel)]="serverUrl"
         placeholder="localhost:4203"
         [disabled]="isConnected()">
     </div>
 
     <div class="input-group">
       <label for="serverPort">Port:</label>
-      <input 
-        id="serverPort" 
-        type="number" 
-        [(ngModel)]="serverPort" 
+      <input
+        id="serverPort"
+        type="number"
+        [(ngModel)]="serverPort"
         placeholder="4203"
         [disabled]="isConnected() || hasServer()">
     </div>
 
     <div class="button-group">
-      <button 
-        class="action-button primary" 
-        [disabled]="isConnected()" 
+      <button
+        class="action-button primary"
+        [disabled]="isConnected()"
         (click)="autoConnect()">
         🔌 Auto Connect
       </button>
-      
-      <button 
-        class="action-button" 
-        [disabled]="isConnected() || hasServer()" 
+
+      <button
+        class="action-button"
+        [disabled]="isConnected() || hasServer()"
         (click)="createServer()">
         🖥️ Create Server
       </button>
-      
-      <button 
-        class="action-button" 
-        [disabled]="isConnected()" 
+
+      <button
+        class="action-button"
+        [disabled]="isConnected()"
         (click)="connect()">
         🔗 Connect
       </button>
-      
-      <button 
-        class="action-button danger" 
-        [disabled]="!isConnected()" 
+
+      <button
+        class="action-button danger"
+        [disabled]="!isConnected()"
         (click)="disconnect()">
         ❌ Disconnect
       </button>
     </div>
+    <div hidden class="status-card" style="background-color: darkred " #errorGroup>
+          <p #errorText></p>
+    </div>
   </div>
 
   <div class="info-box">
-    <p>💡 <strong>Tip:</strong> Click "Play Random Game" to automatically connect and launch a random game. 
+    <p>💡 <strong>Tip:</strong> Click "Play Random Game" to automatically connect and launch a random game.
     The first PC to click becomes the server, the second becomes the client.</p>
   </div>
 </div>

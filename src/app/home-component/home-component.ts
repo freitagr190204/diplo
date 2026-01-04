@@ -1,4 +1,4 @@
-import {Component, signal, effect, OnInit, OnDestroy} from '@angular/core';
+import {Component, signal, effect, OnInit, OnDestroy, ViewChild, ElementRef} from '@angular/core';
 import {FormsModule} from '@angular/forms';
 import {CommonModule} from '@angular/common';
 
@@ -19,6 +19,8 @@ export class HomeComponent implements OnInit, OnDestroy {
   serverPort = signal('4203');
   connectionRole = signal<'server' | 'client' | 'disconnected'>('disconnected');
   statusMessage = signal('Not connected');
+  @ViewChild('errorGroup') errorGroupElement!: ElementRef<HTMLDivElement>;
+  @ViewChild('errorText') errorTextElement!: ElementRef<HTMLParagraphElement>;
   private statusCheckInterval: any;
 
   constructor() {
@@ -115,12 +117,20 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   protected async connect() {
     // @ts-ignore
-    const success = (await window.api.connectWithUrl(this.serverUrl())).success;
+    const result = (await window.api.connectWithUrl(this.serverUrl()));
+    const success = result.success;
+    const url = result.url;
     console.log(success);
     this.isConnected.set(success);
     if (success) {
       this.connectionRole.set('client');
       this.isClient.set(true);
+    }else {
+      this.errorTextElement.nativeElement.textContent = `No server at ${url} or network problem! Make sure the 2 Devices can find each other on the network!`
+      this.errorGroupElement.nativeElement.hidden=false;
+      setTimeout(()=>{
+        this.errorGroupElement.nativeElement.hidden=true;
+      },5000);
     }
   }
 
