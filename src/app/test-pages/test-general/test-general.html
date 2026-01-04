@@ -1,0 +1,67 @@
+<h2>General test page</h2>
+<h5><i>{{versionString}}</i></h5>
+<div class="mt-4 p-2 bg-primary text-white rounded">
+  <h3>Testing swagger (Backend must be started having endpoint /values/products)</h3>
+  <span class="block-span">
+    <h2> <span class="badge" [style.background-color]="okStatus.isOk?'green':'red'"> isOk: {{okStatus.isOk}}</span></h2>
+    @if(okStatus.error){
+    <h3> <span class="badge error">{{okStatus.error}}</span></h3>
+    <i>Adapt: Regenerate swagger files and change 'valuesProductsGet' in ngOnInit to a valid endpoint call</i>
+    }
+    @else if (okStatus.nr===-2){
+    <h5><span class="badge info">Loading from backend...</span></h5>
+    }
+  </span>
+</div>
+
+<div class="mt-4 p-2 bg-info text-black rounded">
+  To use Google fonts remove comments at &lt;link&gt;-tags in index.html
+</div>
+
+<div class="mt-4 p-2 bg-info text-black rounded">
+  <h3>Testing tools</h3>
+
+  <div>
+    This button should look like a Bootstrap success button:
+    <button class="btn btn-success">Bootstrap success</button>
+    <div class="opt-out">To opt out: remove the two "bootstrap" entries in /angular.json (sections styles and scripts)</div>
+  </div>
+
+  <div>
+    This button should look like a Material flat primary button:
+    <button mat-flat-button color="primary">
+      Material Primary
+    </button>
+    <div class="opt-out">To opt out: remove the "material" entriy in /angular.json (section styles)</div>
+  </div>
+
+  <div>
+    This button could look like a blue Tailwind button:
+    <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+      Tailwind blue
+    </button>
+    <div class="opt-in">To opt in: rename tailwind.config_.js to tailwind.config.js and uncomment the three "tailwind" entries in src/styles.scss</div>
+  </div>
+
+  <div>
+    This button should display the bootstrap trash icon:
+    <button type="button" class="btn btn-primary">
+      <i class="bi bi-trash"></i>
+    </button>
+  </div>
+
+  <div>
+    Test linq.polyfill.ts
+    <p>
+      This value should be {{linqAverageExpected}}:
+      <span class="badge" [style.background-color]="linqAverage===linqAverageExpected?'green':'red'">
+        {{linqAverage}}</span>
+    </p>
+    <p>
+      This should be {{namesExpected}}:
+      <span class="badge" [style.background-color]="namesActual===namesExpected?'green':'red'">
+        {{namesActual}}</span>
+    </p>
+  </div>
+
+</div>

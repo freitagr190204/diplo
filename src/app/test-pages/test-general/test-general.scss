@@ -1,0 +1,41 @@
+div {
+  margin-bottom: 0.5em;
+  padding-bottom: 0.2em;
+
+  &:not(:last-child) {
+    border-bottom: 1px solid #eee;
+  }
+}
+
+block-span {
+  display: block;
+  padding: 0.2em;
+}
+
+p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.error {
+  font-size: 16px;
+  color: white;
+  background-color: red;
+}
+
+.info {
+  font-size: 16px;
+  background-color: skyblue;
+}
+
+.opt-out {
+  font-style: italic;
+  font-size: 80%;
+  color:red;
+}
+
+.opt-in {
+  font-style: italic;
+  font-size: 80%;
+  color: green;
+}
