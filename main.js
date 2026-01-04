@@ -9,7 +9,8 @@ const fs = require("node:fs/promises");
 const { Server } = require('socket.io');
 const io = require('socket.io-client');
 const os = require('os');
-
+if (require('electron-squirrel-startup')) app.quit();
+app.setAppUserModelId("com.squirrel.Diplomarbeit.Dashboard");
 // Configuration: load games from a human-readable file in C:\Dashboard\Games
 // File format (games.txt), one game per line:
 //   Spacegame;C:\Dashboard\Games\Spacegame\start.bat
@@ -38,6 +39,8 @@ function createWindow() {
       enableRemoteModule: false,
     }
   });
+  // win.loadURL("http://localhost:4200")
+  //   .then();
   win.loadFile("dist/angular20/browser/index.html")
     .then(value => console.log("successfully loaded index:", value))
     .catch(value => console.log("error loading index:", value));

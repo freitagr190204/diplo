@@ -23,6 +23,7 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   constructor() {
     effect(() => {
+      console.log("effect")
       const role = this.connectionRole();
       if (role === 'server') {
         this.statusMessage.set('Server - Waiting for client...');
@@ -52,6 +53,10 @@ export class HomeComponent implements OnInit, OnDestroy {
       // @ts-ignore
       const status = await window.api.getConnectionStatus();
       if (status) {
+        if (this.connectionRole()!== status.status){
+          console.log("Connection Status changed " + status.status);
+        }
+        this.connectionRole()
         this.connectionRole.set(status.status);
         this.isConnected.set(status.status !== 'disconnected');
         this.hasServer.set(status.isServer);
@@ -67,10 +72,10 @@ export class HomeComponent implements OnInit, OnDestroy {
     if (!this.isConnected()) {
       await this.autoConnect();
     }
-    
+
     // Wait a bit for connection to establish
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
     // Launch game (random selection happens in main.js)
     // @ts-ignore
     window.api.launchGame();
@@ -120,7 +125,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected async stopServer() {
-    await this.disconnect();
+    await this.disconnect_only();
     // @ts-ignore
     const success = (await window.api.stopWsServer()).success;
     console.log(success);
@@ -132,6 +137,13 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected async disconnect() {
+    if (this.connectionRole() ==="server"){
+      await this.stopServer();
+      return;
+    }
+    await this.disconnect_only();
+  }
+  protected async disconnect_only(){
     // @ts-ignore
     await window.api.disconnectFromServer();
     this.isConnected.set(false);
