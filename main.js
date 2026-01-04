@@ -344,10 +344,22 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
     clientSocket.on('connect_error', (error) => {
       console.error('Connection error:', error);
     });
-
+    if (!clientSocket.connected) {
+      if (clientSocket){
+        clientSocket.close();
+      }
+      clientSocket = null;
+      isClient = false;
+      connectionStatus = 'disconnected';
+      return {success: false, url };
+    }
     return {success: true, url };
   } catch (error) {
     console.error('Error connecting:', error);
+    clientSocket.close();
+    clientSocket = null;
+    isClient = false;
+    connectionStatus = 'disconnected';
     return {success: false, error: error.message };
   }
 });
@@ -433,11 +445,19 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
 
           clientSocket.on('connect_error', (error) => {
             console.error('Connection error:', error);
+            clientSocket.close();
+            clientSocket = null;
+            isClient = false;
+            connectionStatus = 'disconnected';
           });
 
           return {success: true, url: targetUrl };
         } catch (error) {
           console.error('Error connecting:', error);
+          clientSocket.close();
+          clientSocket = null;
+          isClient = false;
+          connectionStatus = 'disconnected';
           return {success: false, error: error.message };
         }
       };
