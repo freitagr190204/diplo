@@ -1,7 +1,7 @@
 // main.js
 'use strict';
 
-const {app, BrowserWindow} = require('electron');
+const {app, BrowserWindow, globalShortcut} = require('electron');
 const path = require('path');
 const {ipcMain} = require('electron');
 const {execFile, spawn} = require('child_process');
@@ -10,16 +10,18 @@ const { Server } = require('socket.io');
 const io = require('socket.io-client');
 const os = require('os');
 
+const isDev = !app.isPackaged;
+
 // Configuration: load games from a human-readable file in C:\Dashboard\Games
 // File format (games.txt), one game per line:
 //   Spacegame;C:\Dashboard\Games\Spacegame\start.bat
-//   JumpAndRun;C:\Dashboard\Games\JumpAndRun\start.bat
+//   JumpAndRun;C:\Dashboard\Games\JumpAndRun\start.bat;C:\Dashboard\Games\JumpAndRun\cover.jpg
 // Lines starting with # or empty lines are ignored.
 const GAMES_CONFIG_FILE = process.platform === 'win32'
   ? 'C:\\Dashboard\\Games\\games.txt'
   : null;
 
-/** @type {{ name: string; batchPath: string; }[]} */
+/** @type {{ name: string; batchPath: string; imagePath?: string; }[]} */
 let GAMES = [];
 
 // Error Handling
@@ -38,7 +40,34 @@ function createWindow() {
       enableRemoteModule: false,
     }
   });
-  const _ = win.loadURL("http://localhost:4200");
+
+  mainWindow = win;
+  const productionIndex = path.join(__dirname, 'dist', 'angular20', 'browser', 'index.html');
+
+  if (isDev) {
+    let didFallbackToFile = false;
+    const loadBuiltAppFallback = () => {
+      if (didFallbackToFile) {
+        return;
+      }
+      didFallbackToFile = true;
+      console.warn('Dev server unavailable - loading built Angular files instead.');
+      win.loadFile(productionIndex).catch((error) => {
+        console.error('Failed to load built Angular app:', error);
+      });
+    };
+
+    win.webContents.once('did-fail-load', () => {
+      loadBuiltAppFallback();
+    });
+
+    win.loadURL('http://localhost:4200').catch(() => {
+      loadBuiltAppFallback();
+    });
+  } else {
+    // Angular 20 with @angular/build:application outputs to dist/angular20/browser
+    win.loadFile(productionIndex);
+  }
   
   // Close game when window closes
   win.on('close', () => {
@@ -73,6 +102,120 @@ let connectionStatus = 'disconnected'; // disconnected, server, client
 let gameFiles = [];
 let mainWindow = null;
 let processMonitorInterval = null;
+/** Client wartet auf slotSpin-Antwort fuer lokalen Hebelzug (kein zweites slotSpinBegin). */
+let clientSpinAwaitingInvoke = false;
+
+const SERVER_IP = '192.168.10.1';
+const CLIENT_IP = '192.168.10.2';
+const SOCKET_PORT = 4203;
+
+function getLocalIPv4() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return null;
+}
+
+function getRoleByIP() {
+  const ip = getLocalIPv4();
+  if (ip === SERVER_IP) return 'server';
+  if (ip === CLIENT_IP) return 'client';
+  return 'unknown';
+}
+
+function notifyGameSelected(gameIndex) {
+  if (!mainWindow || !Array.isArray(GAMES)) {
+    return;
+  }
+  if (!Number.isInteger(gameIndex) || gameIndex < 0 || gameIndex >= GAMES.length) {
+    return;
+  }
+  const game = GAMES[gameIndex];
+  try {
+    mainWindow.webContents.send('gameSelected', {
+      index: gameIndex,
+      name: game?.name || '',
+      batchPath: game?.batchPath || ''
+    });
+  } catch (e) {
+    console.error('Failed to send gameSelected to renderer:', e);
+  }
+}
+
+function notifyGameError(message) {
+  if (!mainWindow) {
+    return;
+  }
+  try {
+    mainWindow.webContents.send('gameError', {
+      message: message || 'Failed to start game.'
+    });
+  } catch (e) {
+    console.error('Failed to send gameError to renderer:', e);
+  }
+}
+
+/** Shared random slot outcome for both arcade cabinets (index + seed for identical reel shuffle). */
+function generateSlotSpinPayload() {
+  const n = GAMES.length;
+  if (!n) {
+    return null;
+  }
+  const targetIndex = getRandomInt(0, n);
+  const seed = getRandomInt(1, 2147483646);
+  return { targetIndex, seed };
+}
+
+function notifySlotSpin(payload, notifyLocalRenderer = true) {
+  if (!payload) {
+    return;
+  }
+  if (notifyLocalRenderer && mainWindow) {
+    try {
+      mainWindow.webContents.send('slotSpinBegin', payload);
+    } catch (e) {
+      console.error('Failed to send slotSpinBegin to renderer:', e);
+    }
+  }
+  if (isServer && serverSocket) {
+    serverSocket.sockets.emit('slotSpin', payload);
+  }
+}
+
+function attachSlotSpinHandlers(socket) {
+  if (!socket) {
+    return;
+  }
+  socket.on('requestSlotSpin', () => {
+    const payload = generateSlotSpinPayload();
+    if (!payload) {
+      return;
+    }
+    console.log('Server: slot spin requested — index', payload.targetIndex, 'seed', payload.seed);
+    notifySlotSpin(payload, true);
+  });
+}
+
+function onClientPassiveSlotSpin(payload) {
+  if (clientSpinAwaitingInvoke) {
+    return;
+  }
+  console.log('Client: passive synced slot spin', payload?.targetIndex);
+  notifySlotSpin(payload, true);
+}
+
+function attachClientPassiveSlotSpinListener() {
+  if (!clientSocket) {
+    return;
+  }
+  clientSocket.off('slotSpin', onClientPassiveSlotSpin);
+  clientSocket.on('slotSpin', onClientPassiveSlotSpin);
+}
 
 // Helper function to close game and notify other PC
 function closeGameAndNotify() {
@@ -114,12 +257,17 @@ async function loadGamesConfig() {
         continue;
       }
       const name = parts[0].trim();
-      const batchPath = parts.slice(1).join(';').trim();
+      const batchPath = parts[1].trim();
+      const imagePath = parts.length >= 3 ? parts.slice(2).join(';').trim() : '';
       if (!name || !batchPath) {
         console.warn('Skipping invalid game entry (missing name or path):', line);
         continue;
       }
-      parsed.push({ name, batchPath });
+      parsed.push({
+        name,
+        batchPath,
+        ...(imagePath ? { imagePath } : {})
+      });
     }
     GAMES = parsed;
     console.log('Loaded games from config:', GAMES);
@@ -132,9 +280,13 @@ async function loadGamesConfig() {
 app.whenReady().then(async () => {
   await loadGamesConfig();
   createWindow();
+  globalShortcut.register('Control+Shift+Q', () => {
+    console.log('Ctrl+Shift+Q pressed - quitting');
+    app.quit();
+  });
 });
 app.on('window-all-closed', () => {
-  // Close any running games before quitting
+  globalShortcut.unregisterAll();
   closeGameAndNotify();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -142,25 +294,44 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-ipcMain.on('launchGame', async () => {
+ipcMain.on('launchGame', async (event, gameIndex) => {
+  // When called without a gameIndex, behave like \"random\" mode.
+  // When a specific index is provided, both PCs launch the same game.
   if (isClient && clientSocket && clientSocket.connected) {
-    // Client sends request to server (server will pick a random game)
-    console.log('Client: sending launch command request to server');
-    clientSocket.emit('launchGame');
+    console.log('Client: sending launch command request to server with index:', gameIndex);
+    clientSocket.emit('launchGame', gameIndex);
   } else if (isServer && serverSocket) {
+    const clientCount = serverSocket.sockets?.sockets?.size ?? 0;
+    if (clientCount === 0) {
+      notifyGameError(
+        'Kein zweiter Automat verbunden: Auf PC 1 (Server, 192.168.10.1) laeuft der Launcher, aber PC 2 (Client, 192.168.10.2) ist noch nicht verbunden. Bitte auch dort den Launcher starten und auf „verbunden“ warten, bevor ein Spiel gestartet wird.'
+      );
+      return;
+    }
     if (!GAMES.length) {
       console.error('No games configured in GAMES array');
       return;
     }
-    const gameIndex = getRandomInt(0, GAMES.length);
-    console.log('Server: launching game as server with index', gameIndex, 'name:', GAMES[gameIndex]?.name);
-    launchGame(gameIndex);
+    let indexToLaunch = gameIndex;
+    if (!Number.isInteger(indexToLaunch)) {
+      indexToLaunch = getRandomInt(0, GAMES.length);
+    }
+    if (indexToLaunch < 0 || indexToLaunch >= GAMES.length) {
+      console.error('Invalid game index for launchGame:', indexToLaunch);
+      return;
+    }
+    console.log(
+      'Server: launching game as server with index',
+      indexToLaunch,
+      'name:',
+      GAMES[indexToLaunch]?.name
+    );
+    notifyGameSelected(indexToLaunch);
+    launchGame(indexToLaunch);
     // Broadcast to all clients so they launch the same game index
-    serverSocket.sockets.emit('launchGame', gameIndex);
+    serverSocket.sockets.emit('launchGame', indexToLaunch);
   } else {
-    console.log('Not connected - attempting auto-connect and launch');
-    // Try to auto-connect first
-    // This will be handled by the frontend
+    console.log('Not connected - attempting auto-connect and launch (handled in renderer)');
   }
 });
 
@@ -184,7 +355,8 @@ ipcMain.on('closeGame', () => {
 });
 ipcMain.handle('createWsServer', async (event, port) => {
   try {
-    serverSocket = new Server(port, {
+    const portNum = parseInt(String(port), 10) || SOCKET_PORT;
+    serverSocket = new Server(portNum, {
       cors: {
         origin: "*",
         methods: ["GET", "POST"]
@@ -196,17 +368,31 @@ ipcMain.handle('createWsServer', async (event, port) => {
     
     serverSocket.on('connection', (cs) => {
       console.log('New client connected');
+      attachSlotSpinHandlers(cs);
 
-      cs.on('launchGame', () => {
+      cs.on('launchGame', (gameIndex) => {
         if (!GAMES.length) {
           console.error('No games configured in GAMES array');
           return;
         }
-        const gameIndex = getRandomInt(0, GAMES.length);
-        console.log('Server: Launching game on server (batch file) with index', gameIndex, 'name:', GAMES[gameIndex]?.name);
-        launchGame(gameIndex);
+        let indexToLaunch = gameIndex;
+        if (!Number.isInteger(indexToLaunch)) {
+          indexToLaunch = getRandomInt(0, GAMES.length);
+        }
+        if (indexToLaunch < 0 || indexToLaunch >= GAMES.length) {
+          console.error('Invalid game index requested by client:', indexToLaunch);
+          return;
+        }
+        console.log(
+          'Server: Launching game on server (batch file) with index',
+          indexToLaunch,
+          'name:',
+          GAMES[indexToLaunch]?.name
+        );
+        notifyGameSelected(indexToLaunch);
+        launchGame(indexToLaunch);
         // Broadcast to all clients
-        serverSocket.sockets.emit('launchGame', gameIndex);
+        serverSocket.sockets.emit('launchGame', indexToLaunch);
       });
       
       cs.on('closeGame', () => {
@@ -284,9 +470,12 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
     
     clientSocket.on('launchGame', (gameIndex) => {
       console.log('Client: received launchGame command - launching client batch with index', gameIndex);
+      notifyGameSelected(gameIndex);
       launchGame(gameIndex);
     });
-    
+
+    attachClientPassiveSlotSpinListener();
+
     clientSocket.on('closeGame', () => {
       console.log('Client: received closeGame command - closing game');
       if (gameProcess) {
@@ -374,249 +563,242 @@ ipcMain.handle('getConnectionStatus', async () => {
   return { status: connectionStatus, isServer, isClient };
 });
 
-ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
-  // Try to connect first, if fails, become server
-  try {
-    const urlWithProtocol = targetUrl.startsWith('http') ? targetUrl : `http://${targetUrl}`;
-    const testSocket = io(urlWithProtocol, {
-      timeout: 2000,
-      reconnection: false
-    });
-    
-    return new Promise((resolve) => {
-      let resolved = false;
-      
-      const connectAsClient = async () => {
-        try {
-          console.log('Connecting to', targetUrl);
-          const urlWithProtocol = targetUrl.startsWith('http') ? targetUrl : `http://${targetUrl}`;
-          clientSocket = io(urlWithProtocol, {
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionAttempts: 5
-          });
-          
-          isClient = true;
-          isServer = false;
-          connectionStatus = 'client';
-          
-          clientSocket.on('connect', () => {
-            console.log('Connected to server');
-          });
-          
-          clientSocket.on('launchGame', (gameIndex) => {
-            console.log('Client: received launchGame command with index', gameIndex);
-            launchGame(gameIndex);
-          });
-          
-          clientSocket.on('closeGame', () => {
-            console.log('Client: received closeGame command');
-            if (gameProcess) {
-              if (process.platform === 'win32') {
-                spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-              } else {
-                gameProcess.kill('SIGTERM');
-              }
-              gameProcess = null;
-            }
-          });
-          
-          clientSocket.on('disconnect', () => {
-            console.log('Disconnected from server');
-            connectionStatus = 'disconnected';
-          });
-          
-          clientSocket.on('connect_error', (error) => {
-            console.error('Connection error:', error);
-          });
-          
-          return {success: true, url: targetUrl };
-        } catch (error) {
-          console.error('Error connecting:', error);
-          return {success: false, error: error.message };
-        }
-      };
-      
-      const createAsServer = async () => {
-        try {
-          serverSocket = new Server(port, {
-            cors: {
-              origin: "*",
-              methods: ["GET", "POST"]
-            }
-          });
-          isServer = true;
-          isClient = false;
-          connectionStatus = 'server';
-          
-          serverSocket.on('connection', (cs) => {
-            console.log('New client connected');
+ipcMain.on('quitApp', () => {
+  app.quit();
+});
 
-            cs.on('launchGame', () => {
-              if (!GAMES.length) {
-                console.error('No games configured in GAMES array');
-                return;
-              }
-              const gameIndex = getRandomInt(0, GAMES.length);
-              console.log('Server: Launching game on server (batch file) with index', gameIndex, 'name:', GAMES[gameIndex]?.name);
-              launchGame(gameIndex);
-              serverSocket.sockets.emit('launchGame', gameIndex);
-            });
-            
-            cs.on('closeGame', () => {
-              console.log('Server: Client requested game close - closing server game and notifying all clients');
-              if (gameProcess) {
-                try {
-                  console.log('Server: Attempting to close game process with PID:', gameProcess.pid);
-                  if (process.platform === 'win32') {
-                    try {
-                      gameProcess.kill('SIGTERM');
-                      setTimeout(() => {
-                        if (gameProcess) {
-                          console.log('Server: Force killing game process with taskkill');
-                          spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                        }
-                      }, 500);
-                    } catch (e) {
-                      console.log('Server: Using taskkill to close game');
-                      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                    }
-                  } else {
-                    gameProcess.kill('SIGTERM');
-                    setTimeout(() => {
-                      if (gameProcess) {
-                        gameProcess.kill('SIGKILL');
-                      }
-                    }, 1000);
-                  }
-                } catch (e) {
-                  console.error('Error closing game:', e);
-                }
-                gameProcess = null;
-                if (processMonitorInterval) {
-                  clearInterval(processMonitorInterval);
-                  processMonitorInterval = null;
-                }
-                console.log('Server: Game process closed');
-              }
-              serverSocket.sockets.emit('closeGame');
-            });
-            
-            cs.on('disconnect', () => {
-              console.log('Client disconnected');
-            });
-          });
-          console.log('created server on port', port);
-          return { success: true, port };
-        } catch (error) {
-          console.error('Error creating server:', error);
-          return { success: false, error: error.message };
-        }
-      };
-      
-      testSocket.on('connect', async () => {
-        if (resolved) return;
-        resolved = true;
-        testSocket.close();
-        // Server exists, become client
-        const result = await connectAsClient();
-        resolve({ success: true, role: 'client', ...result });
-      });
-      
-      testSocket.on('connect_error', async () => {
-        if (resolved) return;
-        resolved = true;
-        testSocket.close();
-        // No server found, become server
-        const result = await createAsServer();
-        resolve({ success: true, role: 'server', ...result });
-      });
-      
-      setTimeout(async () => {
-        if (resolved) return;
-        resolved = true;
-        testSocket.close();
-        // Timeout, become server
-        const result = await createAsServer();
-        resolve({ success: true, role: 'server', ...result });
-      }, 2000);
+ipcMain.handle('getLocalNetworkInfo', async () => {
+  const ip = getLocalIPv4();
+  const role = getRoleByIP();
+  return { ip: ip || 'unknown', role };
+});
+
+ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
+  const portNum = parseInt(String(port), 10) || SOCKET_PORT;
+  const roleByIP = getRoleByIP();
+  const serverUrl = `http://${SERVER_IP}:${portNum}`;
+
+  const setupClientListeners = () => {
+    clientSocket.on('connect', () => console.log('Connected to server'));
+    clientSocket.on('launchGame', (gameIndex) => {
+      console.log('Client: received launchGame with index', gameIndex);
+      notifyGameSelected(gameIndex);
+      launchGame(gameIndex);
     });
-  } catch (error) {
-    // On error, become server
-    try {
-      serverSocket = new Server(port, {
-        cors: {
-          origin: "*",
-          methods: ["GET", "POST"]
+    attachClientPassiveSlotSpinListener();
+    clientSocket.on('closeGame', () => {
+      if (gameProcess) {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
+        } else {
+          gameProcess.kill('SIGTERM');
         }
+        gameProcess = null;
+      }
+    });
+    clientSocket.on('disconnect', () => { connectionStatus = 'disconnected'; });
+    clientSocket.on('connect_error', (err) => console.error('Connection error:', err));
+  };
+
+  const setupServerListeners = () => {
+    serverSocket.on('connection', (cs) => {
+      console.log('New client connected');
+      attachSlotSpinHandlers(cs);
+      cs.on('launchGame', (gameIndex) => {
+        if (!GAMES.length) return;
+        let idx = Number.isInteger(gameIndex) ? gameIndex : getRandomInt(0, GAMES.length);
+        if (idx < 0 || idx >= GAMES.length) return;
+        notifyGameSelected(idx);
+        launchGame(idx);
+        serverSocket.sockets.emit('launchGame', idx);
       });
+      cs.on('closeGame', () => {
+        if (gameProcess) {
+          try {
+            if (process.platform === 'win32') {
+              spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
+            } else {
+              gameProcess.kill('SIGTERM');
+            }
+          } catch (e) {}
+          gameProcess = null;
+          if (processMonitorInterval) {
+            clearInterval(processMonitorInterval);
+            processMonitorInterval = null;
+          }
+        }
+        serverSocket.sockets.emit('closeGame');
+      });
+      cs.on('disconnect', () => console.log('Client disconnected'));
+    });
+  };
+
+  if (roleByIP === 'server') {
+    try {
+      serverSocket = new Server(portNum, { cors: { origin: '*', methods: ['GET', 'POST'] } });
       isServer = true;
       isClient = false;
       connectionStatus = 'server';
-      
-      serverSocket.on('connection', (cs) => {
-        console.log('New client connected');
-
-        cs.on('launchGame', () => {
-          if (!GAMES.length) {
-            console.error('No games configured in GAMES array');
-            return;
-          }
-          const gameIndex = getRandomInt(0, GAMES.length);
-          console.log('Server: Launching game on server (batch file) with index', gameIndex, 'name:', GAMES[gameIndex]?.name);
-          launchGame(gameIndex);
-          serverSocket.sockets.emit('launchGame', gameIndex);
-        });
-        
-        cs.on('closeGame', () => {
-          console.log('Server: Client requested game close - closing server game and notifying all clients');
-          if (gameProcess) {
-            try {
-              console.log('Server: Attempting to close game process with PID:', gameProcess.pid);
-              if (process.platform === 'win32') {
-                try {
-                  gameProcess.kill('SIGTERM');
-                  setTimeout(() => {
-                    if (gameProcess) {
-                      console.log('Server: Force killing game process with taskkill');
-                      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                    }
-                  }, 500);
-                } catch (e) {
-                  console.log('Server: Using taskkill to close game');
-                  spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                }
-              } else {
-                gameProcess.kill('SIGTERM');
-                setTimeout(() => {
-                  if (gameProcess) {
-                    gameProcess.kill('SIGKILL');
-                  }
-                }, 1000);
-              }
-            } catch (e) {
-              console.error('Error closing game:', e);
-            }
-            gameProcess = null;
-            if (processMonitorInterval) {
-              clearInterval(processMonitorInterval);
-              processMonitorInterval = null;
-            }
-            console.log('Server: Game process closed');
-          }
-          serverSocket.sockets.emit('closeGame');
-        });
-        
-        cs.on('disconnect', () => {
-          console.log('Client disconnected');
-        });
-      });
-      console.log('created server on port', port);
-      return { success: true, role: 'server', port };
+      setupServerListeners();
+      console.log('Server created on port', portNum, '(this PC is 192.168.10.1)');
+      return { success: true, role: 'server', port: portNum };
     } catch (e) {
+      console.error('Error creating server:', e);
       return { success: false, error: e.message };
     }
   }
+
+  if (roleByIP === 'client') {
+    return new Promise((resolve) => {
+      clientSocket = io(serverUrl, {
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5,
+        timeout: 5000
+      });
+      isClient = true;
+      isServer = false;
+      connectionStatus = 'client';
+      setupClientListeners();
+
+      const onConnect = () => {
+        clientSocket.off('connect', onConnect);
+        clientSocket.off('connect_error', onError);
+        resolve({ success: true, role: 'client', url: serverUrl });
+      };
+      const onError = (err) => {
+        clientSocket.off('connect', onConnect);
+        clientSocket.off('connect_error', onError);
+        clientSocket.close();
+        clientSocket = null;
+        isClient = false;
+        connectionStatus = 'disconnected';
+        resolve({
+          success: false,
+          error:
+            'Verbindung fehlgeschlagen: ' +
+            (err?.message || 'Server (192.168.10.1) nicht erreichbar') +
+            '. Pruefen Sie, ob der Launcher auf PC 1 laeuft, ob beide PCs im gleichen Netz (192.168.10.x) sind und ob Port ' +
+            portNum +
+            ' in der Firewall erlaubt ist.'
+        });
+      };
+
+      clientSocket.once('connect', onConnect);
+      clientSocket.once('connect_error', onError);
+
+      setTimeout(() => {
+        if (clientSocket && !clientSocket.connected) {
+          clientSocket.off('connect', onConnect);
+          clientSocket.off('connect_error', onError);
+          clientSocket.close();
+          clientSocket = null;
+          isClient = false;
+          connectionStatus = 'disconnected';
+          resolve({
+            success: false,
+            error:
+              'Verbindungs-Timeout (6 s): Dieser PC (192.168.10.2) hat innerhalb von 6 Sekunden keine Antwort vom Server-PC (192.168.10.1) auf Port ' +
+              portNum +
+              ' erhalten. Bitte zuerst den Launcher auf dem Server-PC starten, LAN-Kabel pruefen und die Windows-Firewall fuer Port ' +
+              portNum +
+              ' freigeben.'
+          });
+        }
+      }, 6000);
+    });
+  }
+
+  const urlWithProtocol = targetUrl.startsWith('http') ? targetUrl : `http://${targetUrl}`;
+  const testSocket = io(urlWithProtocol, { timeout: 2000, reconnection: false });
+  return new Promise((resolve) => {
+    let resolved = false;
+    const connectAsClient = () => {
+      clientSocket = io(urlWithProtocol, { reconnection: true, reconnectionDelay: 1000, reconnectionAttempts: 5 });
+      isClient = true;
+      isServer = false;
+      connectionStatus = 'client';
+      setupClientListeners();
+      resolve({ success: true, role: 'client', url: targetUrl });
+    };
+    const createAsServer = () => {
+      try {
+        serverSocket = new Server(portNum, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+        isServer = true;
+        isClient = false;
+        connectionStatus = 'server';
+        setupServerListeners();
+        resolve({ success: true, role: 'server', port: portNum });
+      } catch (e) {
+        resolve({ success: false, error: e.message });
+      }
+    };
+    testSocket.on('connect', () => {
+      if (resolved) return;
+      resolved = true;
+      testSocket.close();
+      connectAsClient();
+    });
+    testSocket.on('connect_error', () => {
+      if (resolved) return;
+      resolved = true;
+      testSocket.close();
+      createAsServer();
+    });
+    setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      testSocket.close();
+      createAsServer();
+    }, 2500);
+  });
+});
+
+ipcMain.handle('getGames', async () => {
+  return GAMES;
+});
+
+ipcMain.handle('beginRandomSpin', async () => {
+  if (isClient && clientSocket && clientSocket.connected) {
+    clientSpinAwaitingInvoke = true;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (payload) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clientSpinAwaitingInvoke = false;
+        clearTimeout(timer);
+        clientSocket.off('slotSpin', onSpin);
+        resolve(payload);
+      };
+      const onSpin = (payload) => finish(payload);
+      const timer = setTimeout(() => {
+        finish({
+          error:
+            'Spin-Timeout (10 s): Der Server-PC (192.168.10.1) hat die Zufallsziehung nicht beantwortet. Beide Launcher muessen verbunden sein — zuerst Server, dann Client starten.'
+        });
+      }, 10000);
+      clientSocket.once('slotSpin', onSpin);
+      clientSocket.emit('requestSlotSpin');
+    });
+  }
+
+  if (isServer) {
+    const payload = generateSlotSpinPayload();
+    if (!payload) {
+      return { error: 'Keine Spiele geladen — Spin nicht moeglich.' };
+    }
+    notifySlotSpin(payload, false);
+    return payload;
+  }
+
+  const payload = generateSlotSpinPayload();
+  if (!payload) {
+    return { error: 'Keine Spiele geladen — Spin nicht moeglich.' };
+  }
+  return payload;
 });
 
 async function launchGame(gameIndex){
@@ -638,16 +820,19 @@ async function launchGame(gameIndex){
   if (process.platform === 'win32') {
     if (!Number.isInteger(gameIndex) || gameIndex < 0 || gameIndex >= GAMES.length) {
       console.error('Invalid game index for launchGame:', gameIndex);
+      notifyGameError('Invalid game configuration. Please check games.txt (index out of range).');
       return;
     }
     const game = GAMES[gameIndex];
     if (!game) {
       console.error('No game configuration found for index:', gameIndex);
+      notifyGameError('No game found for the selected entry. Please check games.txt.');
       return;
     }
 
     if (!game.batchPath) {
       console.error('Batch path is not configured for game index', gameIndex);
+      notifyGameError('No start script configured for this game. Please check games.txt.');
       return;
     }
 
@@ -673,6 +858,7 @@ async function launchGame(gameIndex){
   
   gameProcess.on('error', (error) => {
     console.error("Error running executable:", error);
+    notifyGameError(error?.message || 'Could not start the game process. Please check the start.bat path.');
     gameProcess = null;
   });
   

@@ -1,6 +1,6 @@
 {
   "name": "angular20",
-  "version": "0.0.0",
+  "version": "1.1.0",
   "scripts": {
     "start": "ng serve",
     "swag": "openapi-generator-cli generate --generator-key angular",
@@ -8,7 +8,8 @@
     "cleanSwag": "rimraf src/app/swagger",
     "signalrGen": "signalr-gen",
     "build": "ng build",
-    "electron": "ng build && electron ."
+    "electron": "ng build && electron .",
+    "dist": "ng build --configuration production && electron-builder"
   },
   "private": true,
   "dependencies": {
@@ -39,6 +40,7 @@
     "@openapitools/openapi-generator-cli": "^2.20.2",
     "@types/jasmine": "~5.1.0",
     "electron": "^39.2.3",
+    "electron-builder": "^26.8.1",
     "jasmine-core": "~5.7.0",
     "karma": "~6.4.0",
     "karma-chrome-launcher": "~3.2.0",
@@ -49,5 +51,21 @@
     "rimraf": "^6.0.1",
     "typescript": "~5.8.2"
   },
-  "main": "main.js"
+  "main": "main.js",
+  "build": {
+    "appId": "com.yourcompany.gamelauncher",
+    "productName": "GameLauncher",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "dist/angular20/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
 }

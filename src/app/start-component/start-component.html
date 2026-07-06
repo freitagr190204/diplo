@@ -1,0 +1,25 @@
+<div class="start-shell">
+  <header class="start-header">
+    <div class="school-logo">
+      <img src="htl-grieskirchen-logo.png" alt="HTL Grieskirchen" />
+    </div>
+    <div class="start-brand">
+      <h1>DUAL ARCADE LAUNCHER</h1>
+      <p class="start-version">Version {{ version }} · {{ versionDate }}</p>
+    </div>
+  </header>
+
+  <main class="start-main">
+    <p class="start-tagline">Zwei Automaten · Ein Spiel · Lokales Netzwerk</p>
+  </main>
+
+  <footer class="start-footer">
+    <div class="start-actions">
+      <div class="start-actions__primary">
+        <button type="button" class="messe-btn" (click)="goMesse()">Messemodus starten</button>
+        <span class="press-hint">Press button</span>
+      </div>
+      <button type="button" class="play-btn" (click)="goFull()">Spiel starten</button>
+    </div>
+  </footer>
+</div>

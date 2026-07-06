@@ -1,94 +1,207 @@
-<div class="game-launcher-container">
-  <div class="header">
-    <h1 class="title">🎮 Game Launcher</h1>
+<div class="layout">
+  <header class="top-bar">
+    <div class="top-bar__titles">
+      <h1>Game Link</h1>
+      <p>Arcade Cabinet Edition</p>
+    </div>
+    <div class="cabinet-badge">Controller Only</div>
+    <div
+      class="connection-pill"
+      [class.connection-pill--connected]="isConnected()"
+      [class.connection-pill--server]="connectionRole() === 'server'"
+      [class.connection-pill--client]="connectionRole() === 'client'">
+      <span class="connection-pill__dot"></span>
+      <span class="connection-pill__text">{{ connectionStatusLabel() }}</span>
+    </div>
+  </header>
+
+  <div class="connection-status">
+    {{ statusMessage() }}
+    <span *ngIf="localRole() === 'client' && !isConnected()" class="connection-hint">
+      → Server-PC (192.168.10.1) zuerst starten
+    </span>
   </div>
 
-  <div class="status-card" [class.connected]="isConnected()" [class.server]="hasServer()" [class.client]="isClient()">
-    <div class="status-indicator">
-      <span class="status-dot" [class.active]="isConnected()"></span>
-      <span class="status-text">{{ statusMessage() }}</span>
-    </div>
-    <div class="role-badge" *ngIf="isConnected()">
-      {{ connectionRole() === 'server' ? '🖥️ Server' : '💻 Client' }}
-    </div>
-  </div>
+  <main class="content">
+    <section class="panel panel--primary">
+      <div class="panel__header">
+        <div>
+          <h2>Arcade Modus</h2>
+          <p *ngIf="mode() === 'manual'; else randomSubtitle">
+            Hebel hoch/runter: Spiel wechseln. A oder Start: sofort starten.
+          </p>
+          <ng-template #randomSubtitle>
+            Start druecken und den Case-Draw fuer beide Automaten ausloesen.
+          </ng-template>
+        </div>
+        <div class="mode-toggle" role="tablist" aria-label="Game mode">
+          <button
+            type="button"
+            class="mode-toggle__button"
+            [class.mode-toggle__button--active]="mode() === 'random'"
+            (click)="setMode('random')">
+            Case Draw
+          </button>
+          <button
+            type="button"
+            class="mode-toggle__button"
+            [class.mode-toggle__button--active]="mode() === 'manual'"
+            (click)="setMode('manual')">
+            Direktwahl
+          </button>
+        </div>
+      </div>
 
-  <div class="main-actions">
-    <button 
-      class="play-button" 
-      [class.disabled]="!isConnected()" 
-      [disabled]="!isConnected()" 
-      (click)="launchGame()">
-      <span class="button-icon">▶️</span>
-      <span class="button-text">Play Random Game</span>
-    </button>
-    
-    <button 
-      class="close-button" 
-      [class.disabled]="!isConnected()" 
-      [disabled]="!isConnected()" 
-      (click)="closeGame()">
-      <span class="button-icon">⏹️</span>
-      <span class="button-text">Close Game</span>
-    </button>
-  </div>
+      <div class="panel__body panel__body--big">
+        <div class="mock-banner" *ngIf="usingMockData()">
+          Mock mode: using local demo games because no real <code>games.txt</code> entries were loaded.
+        </div>
+        <ng-container *ngIf="mode() === 'random'; else manualMode">
+          <div class="mode-description">
+            <h3>Random Case Draw</h3>
+            <p>
+              Das Reel rollt wie ein Loot-Case und bestimmt ein gemeinsames Match fuer beide PCs.
+            </p>
+          </div>
+          <div class="case-wrapper" *ngIf="games().length; else emptyGamesRandom" [class.case-wrapper--shake]="isScreenShaking()">
+            <div class="case-marker"></div>
+            <div
+              class="case-track"
+              [style.transform]="'translateX(-' + caseOffsetPx() + 'px)'"
+              [style.transition]="'transform ' + caseTransitionMs() + 'ms cubic-bezier(.07,.9,.16,1)'">
+              <div
+                class="case-card"
+                *ngFor="let game of caseItems(); let i = index">
+                <div class="case-card__frame">
+                  <div class="case-card__cover" *ngIf="gameImageUrl(game) && !imageBroken(game); else caseFallback">
+                    <img [src]="gameImageUrl(game)!" [alt]="game.name" (error)="onGameImageError(game)" />
+                  </div>
+                  <ng-template #caseFallback>
+                    <div class="case-card__fallback">{{ game.name.charAt(0) }}</div>
+                  </ng-template>
+                  <div class="case-card__gloss"></div>
+                </div>
+                <div class="case-card__name">{{ game.name }}</div>
+              </div>
+            </div>
+            <div class="case-fade"></div>
+          </div>
+          <ng-template #emptyGamesRandom>
+            <div class="empty-state">
+              <p>No games found. Check <code>C:\Dashboard\Games\games.txt</code> format: <code>Name;Start.bat;OptionalImage.jpg</code>.</p>
+            </div>
+          </ng-template>
+          <button
+            type="button"
+            class="action action--primary action--full"
+            [disabled]="!canLaunchRandom()"
+            (click)="onPlayPressed()">
+            <span class="action__icon">▶</span>
+            <span class="action__text">
+              {{ isSpinning() ? 'Rolling…' : (launchCountdown() !== null ? 'Start in ' + launchCountdown() + '…' : 'Case ziehen') }}
+            </span>
+          </button>
+          <div class="selected-game" *ngIf="currentGameName()">
+            <span class="selected-game__label">Gewinner:</span>
+            <span class="selected-game__name">{{ currentGameName() }}</span>
+          </div>
+        </ng-container>
 
-  <div class="connection-panel">
-    <h2 class="panel-title">Connection Settings</h2>
-    
-    <div class="input-group">
-      <label for="serverUrl">Server Address:</label>
-      <input 
-        id="serverUrl" 
-        type="text" 
-        [(ngModel)]="serverUrl" 
-        placeholder="localhost:4203"
-        [disabled]="isConnected()">
-    </div>
+        <ng-template #manualMode>
+          <div class="mode-description">
+            <h3>Direktwahl</h3>
+            <p>
+              Spiel waehlen und direkt auf beiden Automaten starten.
+            </p>
+          </div>
+          <div class="manual-layout" *ngIf="games().length; else emptyGamesManual">
+            <aside class="manual-preview" *ngIf="selectedGame() as selected">
+              <div class="manual-preview__cover" *ngIf="gameImageUrl(selected) && !imageBroken(selected); else selectedFallback">
+                <img [src]="gameImageUrl(selected)!" [alt]="selected.name" (error)="onGameImageError(selected)" />
+              </div>
+              <ng-template #selectedFallback>
+                <div class="manual-preview__fallback">{{ selected.name.charAt(0) }}</div>
+              </ng-template>
+              <div class="manual-preview__meta">
+                <div class="manual-preview__title">{{ selected.name }}</div>
+                <div class="manual-preview__path">{{ selected.batchPath }}</div>
+              </div>
+            </aside>
+            <div class="game-list">
+              <button
+                type="button"
+                class="game-tile"
+                *ngFor="let game of games(); let i = index"
+                [class.game-tile--selected]="i === selectedGameIndex()"
+                (click)="selectGame(i)">
+                <div class="game-tile__thumb" *ngIf="gameImageUrl(game) && !imageBroken(game); else tileFallback">
+                  <img [src]="gameImageUrl(game)!" [alt]="game.name" (error)="onGameImageError(game)" />
+                </div>
+                <ng-template #tileFallback>
+                  <div class="game-tile__thumb game-tile__thumb--fallback">{{ game.name.charAt(0) }}</div>
+                </ng-template>
+                <div class="game-tile__name">{{ game.name }}</div>
+                <div class="game-tile__path">{{ game.batchPath }}</div>
+              </button>
+            </div>
+          </div>
+          <ng-template #emptyGamesManual>
+            <div class="empty-state">
+              <p>No games found. Check <code>C:\Dashboard\Games\games.txt</code> format: <code>Name;Start.bat;OptionalImage.jpg</code>.</p>
+            </div>
+          </ng-template>
+          <button
+            type="button"
+            class="action action--primary action--full"
+            [disabled]="!canLaunchSelected()"
+            (click)="onPlayPressed()">
+            <span class="action__icon">▶</span>
+            <span class="action__text">Ausgewaehltes Spiel starten</span>
+          </button>
+        </ng-template>
 
-    <div class="input-group">
-      <label for="serverPort">Port:</label>
-      <input 
-        id="serverPort" 
-        type="number" 
-        [(ngModel)]="serverPort" 
-        placeholder="4203"
-        [disabled]="isConnected() || hasServer()">
-    </div>
+        <div class="countdown-overlay" *ngIf="mode() === 'random' && launchCountdown() !== null">
+          <div class="countdown-overlay__title">Match startet</div>
+          <div class="countdown-overlay__number">{{ launchCountdown() }}</div>
+        </div>
 
-    <div class="button-group">
-      <button 
-        class="action-button primary" 
-        [disabled]="isConnected()" 
-        (click)="autoConnect()">
-        🔌 Auto Connect
-      </button>
-      
-      <button 
-        class="action-button" 
-        [disabled]="isConnected() || hasServer()" 
-        (click)="createServer()">
-        🖥️ Create Server
-      </button>
-      
-      <button 
-        class="action-button" 
-        [disabled]="isConnected()" 
-        (click)="connect()">
-        🔗 Connect
-      </button>
-      
-      <button 
-        class="action-button danger" 
-        [disabled]="!isConnected()" 
-        (click)="disconnect()">
-        ❌ Disconnect
-      </button>
-    </div>
-  </div>
+        <div class="error-banner" *ngIf="gameError()">
+          <span class="error-banner__title">Game could not be started</span>
+          <span class="error-banner__text">{{ gameError() }}</span>
+        </div>
+      </div>
+    </section>
 
-  <div class="info-box">
-    <p>💡 <strong>Tip:</strong> Click "Play Random Game" to automatically connect and launch a random game. 
-    The first PC to click becomes the server, the second becomes the client.</p>
-  </div>
+    <section class="panel panel--secondary">
+      <div class="panel__header panel__header--compact">
+        <h2>Cabinet HUD</h2>
+        <p>Nur Joystick + Buttons, keine Maus noetig.</p>
+      </div>
+      <div class="panel__body panel__body--stacked">
+        <div class="pc-grid">
+          <div class="pc-row">
+            <div class="pc-label">PC 1</div>
+            <div class="pc-ip">192.168.10.1</div>
+          </div>
+          <div class="pc-row">
+            <div class="pc-label">PC 2</div>
+            <div class="pc-ip">192.168.10.2</div>
+          </div>
+        </div>
+
+        <div class="control-grid">
+          <div class="control-chip"><strong>A / Start</strong><span>Play</span></div>
+          <div class="control-chip"><strong>Hebel hoch/runter</strong><span>Spiel wechseln</span></div>
+          <div class="control-chip"><strong>Hebel links/rechts</strong><span>Modus wechseln</span></div>
+          <div class="control-chip"><strong>Back</strong><span>Spiel stoppen</span></div>
+          <div class="control-chip"><strong>Back + A</strong><span>Neustart</span></div>
+          <div class="control-chip"><strong>Start + Back</strong><span>Launcher beenden</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Dual Cabinet Sync · Local Network Play · Controller Focused UI</span>
+  </footer>
 </div>

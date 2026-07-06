@@ -1,0 +1,132 @@
+.start-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  color: #fff;
+  font-family: "Segoe UI", Inter, sans-serif;
+  background:
+    radial-gradient(circle at 20% 12%, rgba(255, 79, 216, 0.22), transparent 38%),
+    radial-gradient(circle at 80% 8%, rgba(0, 234, 255, 0.2), transparent 38%),
+    linear-gradient(165deg, #120a2a 0%, #1a0f3a 45%, #0f0822 100%);
+}
+
+.start-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.school-logo {
+  width: 140px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 6px;
+}
+
+.school-logo img {
+  width: 100%;
+  display: block;
+}
+
+.start-brand h1 {
+  margin: 0;
+  font-size: clamp(32px, 5vw, 52px);
+  font-weight: 900;
+  color: #ffd93d;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 18px rgba(255, 217, 61, 0.6);
+}
+
+.start-version {
+  margin: 8px 0 0;
+  font-size: 18px;
+  color: #9befff;
+  letter-spacing: 0.06em;
+}
+
+.start-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.start-tagline {
+  font-size: clamp(20px, 3vw, 28px);
+  color: #cfd8ff;
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+.start-footer {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 24px;
+}
+
+.start-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.start-actions__primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.messe-btn {
+  min-width: min(720px, 92vw);
+  border: none;
+  border-radius: 18px;
+  padding: 18px 36px;
+  font-size: clamp(36px, 6vw, 52px);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #2a1400;
+  background: linear-gradient(135deg, #ffd93d, #ffb703);
+  box-shadow: 0 0 28px rgba(255, 217, 61, 0.55);
+  cursor: pointer;
+  animation: pulseStart 1.8s ease-in-out infinite;
+}
+
+.press-hint {
+  font-size: 13px;
+  color: #97d8ff;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.play-btn {
+  border: 2px solid rgba(0, 234, 255, 0.55);
+  border-radius: 14px;
+  padding: 12px 22px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #e8f4ff;
+  background: rgba(16, 10, 38, 0.75);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.play-btn:hover,
+.messe-btn:hover {
+  filter: brightness(1.06);
+}
+
+@keyframes pulseStart {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}

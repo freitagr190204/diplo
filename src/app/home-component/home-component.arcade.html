@@ -1,0 +1,167 @@
+<div class="arcade-shell" [class.arcade-shell--fair]="fairMode()">
+  <header class="arcade-header">
+    <div class="brand-left">
+      <div class="school-logo">
+        <img [src]="schoolLogoSrc" alt="HTL Logo" />
+      </div>
+      <div class="brand-text">
+        <h1>DUAL ARCADE LAUNCHER</h1>
+        <p>HTL Grieskirchen</p>
+      </div>
+    </div>
+    <div class="status-pills" *ngIf="!fairMode()">
+      <div class="pill"><span>Verbindung</span><strong>{{ connectionStatusLabel() }}</strong></div>
+      <div class="pill"><span>Status</span><strong>{{ statusMessage() }}</strong></div>
+    </div>
+  </header>
+
+  <main class="arcade-main">
+    <section class="left-zone">
+      <h2>ZUFALLSAUTOMAT</h2>
+      <div
+        class="left-zone__machine-row"
+        *ngIf="mode() === 'random'">
+        <aside class="slot-payout" aria-label="Letzte Zufallstreffer" *ngIf="!fairMode()">
+          <div class="slot-payout__title">LETZTE TREFFER</div>
+          <ul class="slot-payout__list" *ngIf="randomPickHistory().length; else noRandomHits">
+            <li class="slot-payout__row" *ngFor="let g of randomPickHistory(); trackBy: trackRandomPickBy">
+              <ng-container *ngIf="gameImageUrl(g) && !imageBroken(g)">
+                <div class="slot-payout__mini">
+                  <img [src]="gameImageUrl(g)!" [alt]="" (error)="onGameImageError(g)" />
+                </div>
+              </ng-container>
+              <div class="slot-payout__mini slot-payout__mini--ch" *ngIf="!gameImageUrl(g) || imageBroken(g)">
+                {{ g.name.charAt(0) }}
+              </div>
+              <span class="slot-payout__name">{{ g.name }}</span>
+            </li>
+          </ul>
+          <ng-template #noRandomHits>
+            <p class="slot-payout__empty">Noch keine Ziehung</p>
+          </ng-template>
+        </aside>
+        <div
+          class="cabinet-embed"
+          [class.cabinet-embed--shake]="isScreenShaking()"
+          [class.cabinet-embed--glow]="leverGlow()">
+          <div class="cabinet-embed__inner">
+            <div class="cabinet-stage">
+              <div class="machine-image-crop" aria-hidden="true">
+                <img class="cabinet-photo" [src]="cabinetPhotoSrc()" alt="" draggable="false" />
+              </div>
+              <div class="cabinet-screen">
+                <div class="slot-screen">
+                  <div class="slot-reels-wrap">
+                    <div class="reel-viewport" aria-hidden="true">
+                      <div class="reel-center-band"></div>
+                      <div class="reel-win-line reel-win-line--upper"></div>
+                      <div class="reel-win-line reel-win-line--lower"></div>
+                    </div>
+                    <div class="reels" [class.reels--spinning]="isSpinning()">
+                    <div class="reel">
+                      <div class="reel-inner">
+                        <div class="reel-track" [class.reel-track--spinning]="isSpinning()" [style.transform]="'translateY(-' + reelOffsets()[0] + 'px)'">
+                          <div class="reel-item" *ngFor="let game of reelTrackA()">{{ game.name }}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="reel reel--center">
+                      <div class="reel-inner">
+                        <div class="reel-track" [class.reel-track--spinning]="isSpinning()" [style.transform]="'translateY(-' + reelOffsets()[1] + 'px)'">
+                          <div class="reel-item" *ngFor="let game of reelTrackB()">{{ game.name }}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="reel">
+                      <div class="reel-inner">
+                        <div class="reel-track" [class.reel-track--spinning]="isSpinning()" [style.transform]="'translateY(-' + reelOffsets()[2] + 'px)'">
+                          <div class="reel-item" *ngFor="let game of reelTrackC()">{{ game.name }}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="left-zone__countdown" *ngIf="launchCountdown() !== null && !showPickReveal()">
+            <span>{{ launchCountdown() }}</span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="cabinet-embed"
+        *ngIf="mode() === 'manual'"
+        [class.cabinet-embed--shake]="isScreenShaking()"
+        [class.cabinet-embed--glow]="leverGlow()">
+        <div class="cabinet-embed__inner">
+          <div class="cabinet-stage">
+            <div class="machine-image-crop" aria-hidden="true">
+              <img class="cabinet-photo" [src]="cabinetPhotoSrc()" alt="" draggable="false" />
+            </div>
+            <div class="cabinet-screen">
+              <div class="cabinet-screen-cutout cabinet-screen-cutout--text">
+                <p class="cabinet-screen-hint">Manuelle Auswahl: waehle dein Spiel in der <strong>rechten</strong> Liste.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="machine-note" *ngIf="!fairMode()">Der Automat waehlt ein Spiel fuer beide Stationen (nur im Zufallsmodus).</p>
+    </section>
+
+    <section class="right-zone">
+      <h2>SPIELAUSWAHL</h2>
+      <div class="right-zone__body">
+        <div class="game-grid" [class.game-grid--dimmed]="showPickReveal()" [class.game-grid--spinning]="isSpinning()">
+          <button
+            type="button"
+            class="game-card"
+            *ngFor="let game of games(); let i = index"
+            [class.game-card--selected]="i === selectedGameIndex() && !isSpinning() && !showPickReveal()"
+            [class.game-card--slot-active]="carouselHighlightIndex() === i && (isSpinning() || showPickReveal())"
+            [attr.id]="'game-card-' + i"
+            (click)="setMode('manual'); selectGame(i)">
+            <div class="game-card__image" *ngIf="gameImageUrl(game) && !imageBroken(game); else fallback">
+              <img [src]="gameImageUrl(game)!" [alt]="game.name" (error)="onGameImageError(game)" />
+            </div>
+            <ng-template #fallback>
+              <div class="game-card__fallback">{{ game.name.charAt(0) }}</div>
+            </ng-template>
+            <div class="game-card__title">{{ game.name }}</div>
+          </button>
+        </div>
+
+        <div class="pick-reveal" *ngIf="showPickReveal() && slotResultGame() as picked">
+          <div class="pick-reveal__card">
+            <div class="pick-reveal__image" *ngIf="gameImageUrl(picked) && !imageBroken(picked); else pickFallback">
+              <img [src]="gameImageUrl(picked)!" [alt]="picked.name" (error)="onGameImageError(picked)" />
+            </div>
+            <ng-template #pickFallback>
+              <div class="pick-reveal__fallback">{{ picked.name.charAt(0) }}</div>
+            </ng-template>
+            <h3 class="pick-reveal__title">Spiel ausgewählt</h3>
+            <p class="pick-reveal__name">{{ picked.name }}</p>
+            <div class="pick-reveal__countdown" *ngIf="launchCountdown() !== null">{{ launchCountdown() }}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="bottom-bar">
+    <button type="button" class="start-btn" [disabled]="!canLaunchSelected() && !canLaunchRandom()" (click)="onPlayPressed()">
+      {{ launchCountdown() !== null ? 'START IN ' + launchCountdown() : 'SPIEL STARTEN!' }}
+    </button>
+  </div>
+
+  <div class="hint-bar" *ngIf="!fairMode()">
+    <span>A / B / X / Y / START = Spiel starten</span>
+    <span>Back + LB = Spiel abbrechen</span>
+    <span>Start + Back = Launcher beenden</span>
+  </div>
+
+  <div class="error-banner" *ngIf="gameError()">{{ gameErrorText() }}</div>
+  <div class="mock-banner" *ngIf="usingMockData()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
+</div>
