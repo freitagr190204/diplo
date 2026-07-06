@@ -27,5 +27,7 @@
     {
       "path": "./tsconfig.app.json"
     }
-  ]
+  ],
+  "inlineSources": true,
+  "sourceMap": true
 }
