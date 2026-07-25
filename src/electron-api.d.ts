@@ -19,6 +19,7 @@ export interface ElectronApi {
   onGameSelected: (callback: (payload: unknown) => void) => void;
   onGameError: (callback: (payload: unknown) => void) => void;
   closeGame: () => void;
+  onGameClosed: (callback: () => void) => void;
   createServerWithPort: (port: string) => Promise<{ success: boolean }>;
   stopWsServer: () => Promise<unknown>;
   connectWithUrl: (url: string) => Promise<{ success: boolean }>;

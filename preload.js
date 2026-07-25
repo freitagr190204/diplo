@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   closeGame: () => ipcRenderer.send('closeGame'),
+  onGameClosed: (callback) => {
+    ipcRenderer.on('gameClosed', () => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+    });
+  },
   createServerWithPort: (port) => ipcRenderer.invoke('createWsServer', port),
   stopWsServer: () => ipcRenderer.invoke('stopWsServer'),
   connectWithUrl: (url) => ipcRenderer.invoke('connectWithUrl', url),

@@ -104,6 +104,10 @@ let mainWindow = null;
 let processMonitorInterval = null;
 /** Client wartet auf slotSpin-Antwort fuer lokalen Hebelzug (kein zweites slotSpinBegin). */
 let clientSpinAwaitingInvoke = false;
+/** True while closing because the peer asked us to (avoid close ping-pong). */
+let closingFromRemote = false;
+/** Prevents duplicate gameClosed events from exit + process monitor. */
+let gameClosedNotified = false;
 
 const SERVER_IP = '192.168.10.1';
 const CLIENT_IP = '192.168.10.2';
@@ -158,6 +162,82 @@ function notifyGameError(message) {
   } catch (e) {
     console.error('Failed to send gameError to renderer:', e);
   }
+}
+
+/** Bring the launcher back to the foreground after a game ends. */
+function focusLauncherWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  } catch (e) {
+    console.error('Failed to focus launcher window:', e);
+  }
+}
+
+/** Tell the renderer both cabinets should return to the launcher UI. */
+function notifyGameClosed() {
+  if (gameClosedNotified) {
+    return;
+  }
+  gameClosedNotified = true;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    mainWindow.webContents.send('gameClosed');
+  } catch (e) {
+    console.error('Failed to send gameClosed to renderer:', e);
+  }
+  focusLauncherWindow();
+}
+
+function broadcastCloseGameToPeer() {
+  if (isClient && clientSocket && clientSocket.connected) {
+    clientSocket.emit('closeGame');
+  } else if (isServer && serverSocket) {
+    serverSocket.sockets.emit('closeGame');
+  }
+}
+
+function clearProcessMonitor() {
+  if (processMonitorInterval) {
+    clearInterval(processMonitorInterval);
+    processMonitorInterval = null;
+  }
+}
+
+function killGameProcessHandle(proc) {
+  if (!proc) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', proc.pid, '/F', '/T'], { stdio: 'ignore' });
+    } else {
+      proc.kill('SIGTERM');
+    }
+  } catch (e) {
+    console.error('Error killing game process:', e);
+  }
+}
+
+/** Close local game because the peer ended their session (no re-broadcast). */
+function handlePeerCloseGame() {
+  console.log('Peer requested game close — returning both cabinets to launcher');
+  if (gameProcess) {
+    closingFromRemote = true;
+    const proc = gameProcess;
+    gameProcess = null;
+    clearProcessMonitor();
+    killGameProcessHandle(proc);
+  }
+  notifyGameClosed();
 }
 
 /** Shared random slot outcome for both arcade cabinets (index + seed for identical reel shuffle). */
@@ -338,20 +418,14 @@ ipcMain.on('launchGame', async (event, gameIndex) => {
 ipcMain.on('closeGame', () => {
   if (gameProcess) {
     console.log('Closing game process');
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-    } else {
-      gameProcess.kill('SIGTERM');
-    }
+    closingFromRemote = true;
+    const proc = gameProcess;
     gameProcess = null;
+    clearProcessMonitor();
+    killGameProcessHandle(proc);
   }
-  
-  // Notify the other PC
-  if (isClient && clientSocket && clientSocket.connected) {
-    clientSocket.emit('closeGame');
-  } else if (isServer && serverSocket) {
-    serverSocket.sockets.emit('closeGame');
-  }
+  broadcastCloseGameToPeer();
+  notifyGameClosed();
 });
 ipcMain.handle('createWsServer', async (event, port) => {
   try {
@@ -396,46 +470,7 @@ ipcMain.handle('createWsServer', async (event, port) => {
       });
       
       cs.on('closeGame', () => {
-        console.log('Server: Client requested game close - closing server game and notifying all clients');
-        if (gameProcess) {
-          try {
-            console.log('Server: Attempting to close game process with PID:', gameProcess.pid);
-            if (process.platform === 'win32') {
-              // On Windows, try kill first, then use taskkill as fallback
-              try {
-                gameProcess.kill('SIGTERM');
-                // Give it a moment, then force kill if still running
-                setTimeout(() => {
-                  if (gameProcess) {
-                    console.log('Server: Force killing game process with taskkill');
-                    spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                  }
-                }, 500);
-              } catch (e) {
-                console.log('Server: Using taskkill to close game');
-                spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-              }
-            } else {
-              gameProcess.kill('SIGTERM');
-              setTimeout(() => {
-                if (gameProcess) {
-                  gameProcess.kill('SIGKILL');
-                }
-              }, 1000);
-            }
-          } catch (e) {
-            console.error('Error closing game:', e);
-          }
-          gameProcess = null;
-          // Clear monitoring interval
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
-          }
-          console.log('Server: Game process closed');
-        }
-        // Broadcast to all clients (including the one that sent it, but that's okay)
-        serverSocket.sockets.emit('closeGame');
+        handlePeerCloseGame();
       });
       
       cs.on('disconnect', () => {
@@ -477,47 +512,7 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
     attachClientPassiveSlotSpinListener();
 
     clientSocket.on('closeGame', () => {
-      console.log('Client: received closeGame command - closing game');
-      if (gameProcess) {
-        try {
-          console.log('Client: Attempting to close game process with PID:', gameProcess.pid);
-          // Try to kill the process directly first
-          if (process.platform === 'win32') {
-            // On Windows, try kill first, then use taskkill as fallback
-            try {
-              gameProcess.kill('SIGTERM');
-              // Give it a moment, then force kill if still running
-              setTimeout(() => {
-                if (gameProcess) {
-                  console.log('Client: Force killing game process with taskkill');
-                  spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                }
-              }, 500);
-            } catch (e) {
-              console.log('Client: Using taskkill to close game');
-              spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-            }
-          } else {
-            gameProcess.kill('SIGTERM');
-            setTimeout(() => {
-              if (gameProcess) {
-                gameProcess.kill('SIGKILL');
-              }
-            }, 1000);
-          }
-        } catch (e) {
-          console.error('Error closing game:', e);
-        }
-        gameProcess = null;
-        // Clear monitoring interval
-        if (processMonitorInterval) {
-          clearInterval(processMonitorInterval);
-          processMonitorInterval = null;
-        }
-        console.log('Client: Game process closed');
-      } else {
-        console.log('Client: No game process to close');
-      }
+      handlePeerCloseGame();
     });
     
     clientSocket.on('disconnect', () => {
@@ -587,14 +582,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
     });
     attachClientPassiveSlotSpinListener();
     clientSocket.on('closeGame', () => {
-      if (gameProcess) {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-        } else {
-          gameProcess.kill('SIGTERM');
-        }
-        gameProcess = null;
-      }
+      handlePeerCloseGame();
     });
     clientSocket.on('disconnect', () => { connectionStatus = 'disconnected'; });
     clientSocket.on('connect_error', (err) => console.error('Connection error:', err));
@@ -613,21 +601,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
         serverSocket.sockets.emit('launchGame', idx);
       });
       cs.on('closeGame', () => {
-        if (gameProcess) {
-          try {
-            if (process.platform === 'win32') {
-              spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-            } else {
-              gameProcess.kill('SIGTERM');
-            }
-          } catch (e) {}
-          gameProcess = null;
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
-          }
-        }
-        serverSocket.sockets.emit('closeGame');
+        handlePeerCloseGame();
       });
       cs.on('disconnect', () => console.log('Client disconnected'));
     });
@@ -855,6 +829,8 @@ async function launchGame(gameIndex){
     detached: false
   });
   console.log('Launched game process with PID:', gameProcess.pid);
+  gameClosedNotified = false;
+  closingFromRemote = false;
   
   gameProcess.on('error', (error) => {
     console.error("Error running executable:", error);
@@ -864,31 +840,23 @@ async function launchGame(gameIndex){
   
   gameProcess.on('exit', (code, signal) => {
     console.log(`Game process exited with code ${code} and signal ${signal}`);
-    const wasGameProcess = gameProcess;
     gameProcess = null;
-    
-    // Clear monitoring interval
-    if (processMonitorInterval) {
-      clearInterval(processMonitorInterval);
-      processMonitorInterval = null;
+    clearProcessMonitor();
+
+    const fromRemote = closingFromRemote;
+    closingFromRemote = false;
+
+    if (!fromRemote) {
+      console.log('Game closed locally - notifying peer to return');
+      broadcastCloseGameToPeer();
     }
-    
-    // Notify the other PC that game closed
-    if (isClient && clientSocket && clientSocket.connected) {
-      console.log('Client: Game closed - notifying server');
-      clientSocket.emit('closeGame');
-    } else if (isServer && serverSocket) {
-      console.log('Server: Game closed - notifying all clients');
-      serverSocket.sockets.emit('closeGame');
-    }
+    notifyGameClosed();
   });
   
   // Monitor process on Windows - check if game process still exists
   if (process.platform === 'win32') {
     // Clear any existing monitor
-    if (processMonitorInterval) {
-      clearInterval(processMonitorInterval);
-    }
+    clearProcessMonitor();
     
     processMonitorInterval = setInterval(() => {
       if (gameProcess) {
@@ -898,27 +866,16 @@ async function launchGame(gameIndex){
         } catch (e) {
           // Process doesn't exist - game was closed externally
           console.log('Game process no longer exists (detected by monitor) - notifying other PC');
-          const wasGameProcess = gameProcess;
           gameProcess = null;
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
+          clearProcessMonitor();
+          if (!closingFromRemote) {
+            broadcastCloseGameToPeer();
           }
-          
-          // Notify the other PC to close their game
-          if (isClient && clientSocket && clientSocket.connected) {
-            console.log('Client: Game closed externally - notifying server');
-            clientSocket.emit('closeGame');
-          } else if (isServer && serverSocket) {
-            console.log('Server: Game closed externally - notifying all clients');
-            serverSocket.sockets.emit('closeGame');
-          }
+          closingFromRemote = false;
+          notifyGameClosed();
         }
       } else {
-        if (processMonitorInterval) {
-          clearInterval(processMonitorInterval);
-          processMonitorInterval = null;
-        }
+        clearProcessMonitor();
       }
     }, 300); // Check every 300ms for faster detection
   }

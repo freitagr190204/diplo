@@ -66,6 +66,8 @@ export class HomeComponent implements OnInit, OnDestroy {
   showPickReveal = signal(false);
   /** Messemodus: laufende Attract-/Demo-Ziehung ohne echten Start. */
   isAttractDemo = signal(false);
+  /** Kurz nach Spielende: beide Automaten wieder im Launcher. */
+  showReturnOverlay = signal(false);
   /** True while the physical lever is animating (pull, hold, or spring return). */
   isPulling = signal(false);
   /**
@@ -116,8 +118,10 @@ export class HomeComponent implements OnInit, OnDestroy {
   /** Idle-Zeit bis zur Attract-Demo im Messemodus. */
   private readonly attractIdleMs = 18000;
   private readonly attractRevealMs = 4000;
+  private readonly returnOverlayMs = 4500;
   private attractIdleTimeout: ReturnType<typeof setTimeout> | null = null;
   private attractRevealTimeout: ReturnType<typeof setTimeout> | null = null;
+  private returnOverlayTimeout: ReturnType<typeof setTimeout> | null = null;
   constructor() {
     effect(() => {
       const role = this.connectionRole();
@@ -156,6 +160,8 @@ export class HomeComponent implements OnInit, OnDestroy {
         const index = typeof payload === 'number' ? payload : payload?.index;
         const games = this.games();
         if (typeof index === 'number' && index >= 0 && index < games.length) {
+          this.cancelAttract();
+          this.showReturnOverlay.set(false);
           this.selectedGameIndex.set(index);
           this.currentGameName.set(games[index].name);
           this.gameError.set(null);
@@ -172,6 +178,14 @@ export class HomeComponent implements OnInit, OnDestroy {
         if (message) {
           this.gameError.set(message);
         }
+      });
+    }
+
+    // @ts-ignore
+    if (window.api?.onGameClosed) {
+      // @ts-ignore
+      window.api.onGameClosed(() => {
+        this.onGameSessionClosed();
       });
     }
 
@@ -225,6 +239,10 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.stopTickSound();
     this.clearLeverTimeouts();
     this.clearAttractTimers();
+    if (this.returnOverlayTimeout) {
+      clearTimeout(this.returnOverlayTimeout);
+      this.returnOverlayTimeout = null;
+    }
     this.stopGamepadLoop();
   }
 
@@ -323,12 +341,36 @@ export class HomeComponent implements OnInit, OnDestroy {
     return ip ? `Nicht verbunden (${ip})` : 'Nicht verbunden';
   }
 
+  /** Compact fair-mode pill label (no IP clutter). */
+  protected fairConnectionLabel(): string {
+    const role = this.connectionRole();
+    if (role === 'client') {
+      return 'Verbunden';
+    }
+    if (role === 'server') {
+      return 'Server';
+    }
+    return 'Offline';
+  }
+
+  protected fairConnectionTone(): 'ok' | 'server' | 'down' {
+    const role = this.connectionRole();
+    if (role === 'client') {
+      return 'ok';
+    }
+    if (role === 'server') {
+      return 'server';
+    }
+    return 'down';
+  }
+
   protected isFairIdle(): boolean {
     return (
       this.fairMode() &&
       !this.isSpinning() &&
       !this.isPulling() &&
       !this.showPickReveal() &&
+      !this.showReturnOverlay() &&
       this.launchCountdown() === null &&
       !this.isAttractDemo()
     );
@@ -378,6 +420,10 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   protected async onPlayPressed() {
     this.noteUserActivity();
+
+    if (this.showReturnOverlay()) {
+      return;
+    }
 
     if (this.isAttractDemo()) {
       if (this.isSpinning() || this.isPulling()) {
@@ -1080,6 +1126,7 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.isSpinning() ||
       this.isPulling() ||
       this.showPickReveal() ||
+      this.showReturnOverlay() ||
       this.launchCountdown() !== null ||
       this.isAttractDemo()
     ) {
@@ -1099,6 +1146,7 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.isSpinning() ||
       this.isPulling() ||
       this.showPickReveal() ||
+      this.showReturnOverlay() ||
       this.launchCountdown() !== null ||
       this.games().length === 0
     ) {
@@ -1146,6 +1194,32 @@ export class HomeComponent implements OnInit, OnDestroy {
       clearTimeout(this.attractIdleTimeout);
       this.attractIdleTimeout = null;
     }
+  }
+
+  private onGameSessionClosed() {
+    this.cancelAttract();
+    this.showPickReveal.set(false);
+    this.launchCountdown.set(null);
+    if (this.launchCountdownInterval) {
+      clearInterval(this.launchCountdownInterval);
+      this.launchCountdownInterval = null;
+    }
+    this.gameError.set(null);
+
+    if (this.fairMode()) {
+      this.showReturnOverlay.set(true);
+      if (this.returnOverlayTimeout) {
+        clearTimeout(this.returnOverlayTimeout);
+      }
+      this.returnOverlayTimeout = setTimeout(() => {
+        this.returnOverlayTimeout = null;
+        this.showReturnOverlay.set(false);
+        this.scheduleAttractIdle();
+      }, this.returnOverlayMs);
+      return;
+    }
+
+    this.scheduleAttractIdle();
   }
 
   private triggerScreenShake() {

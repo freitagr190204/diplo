@@ -12,12 +12,22 @@
         <p>HTL Grieskirchen</p>
       </div>
       <div class="brand-text brand-text--fair" *ngIf="fairMode()">
-        <p>HTL Grieskirchen</p>
+        <h1>HTL Grieskirchen</h1>
+        <p>Technik mit Zukunft</p>
       </div>
     </div>
     <div class="status-pills" *ngIf="!fairMode()">
       <div class="pill"><span>Verbindung</span><strong>{{ connectionStatusLabel() }}</strong></div>
       <div class="pill"><span>Status</span><strong>{{ statusMessage() }}</strong></div>
+    </div>
+    <div
+      class="fair-conn-pill"
+      *ngIf="fairMode()"
+      [class.fair-conn-pill--ok]="fairConnectionTone() === 'ok'"
+      [class.fair-conn-pill--server]="fairConnectionTone() === 'server'"
+      [class.fair-conn-pill--down]="fairConnectionTone() === 'down'">
+      <span class="fair-conn-pill__dot" aria-hidden="true"></span>
+      <strong>{{ fairConnectionLabel() }}</strong>
     </div>
   </header>
 
@@ -197,4 +207,21 @@
 
   <div class="error-banner" *ngIf="gameError()">{{ gameErrorText() }}</div>
   <div class="mock-banner" *ngIf="usingMockData() && !fairMode()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
+
+  <div class="fair-return" *ngIf="fairMode() && showReturnOverlay()">
+    <div class="fair-return__card">
+      <div class="fair-return__logo">
+        <img [src]="schoolLogoSrc" alt="HTL Grieskirchen" />
+      </div>
+      <h2>HTL Grieskirchen</h2>
+      <p class="fair-return__title">Naechstes Duo bitte</p>
+      <p class="fair-return__sub">Informatik · Medientechnik · Elektronik</p>
+    </div>
+  </div>
+
+  <footer class="fair-brand-bar" *ngIf="fairMode() && !showReturnOverlay()">
+    <span>HTL Grieskirchen</span>
+    <span class="fair-brand-bar__sep" aria-hidden="true">·</span>
+    <span>Informatik · Medientechnik · Elektronik</span>
+  </footer>
 </div>

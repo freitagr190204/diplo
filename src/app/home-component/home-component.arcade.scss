@@ -776,21 +776,100 @@
 }
 
 .arcade-header--fair {
-  justify-content: center;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .school-logo--fair {
-  width: 88px;
-  padding: 4px;
-  border-radius: 8px;
+  width: 96px;
+  padding: 5px;
+  border-radius: 10px;
+}
+
+.brand-text--fair h1 {
+  margin: 0;
+  font-size: clamp(22px, 3.2vw, 34px);
+  line-height: 1.05;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: #ffd93d;
+  text-shadow: 0 0 16px rgba(255, 217, 61, 0.45);
 }
 
 .brand-text--fair p {
-  margin: 0;
-  font-size: 16px;
+  margin: 4px 0 0;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  color: #cfd8ff;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9befff;
+}
+
+.fair-conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 118px;
+  justify-content: center;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(12, 8, 28, 0.78);
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.25);
+}
+
+.fair-conn-pill strong {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fair-conn-pill__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #8892a8;
+  box-shadow: 0 0 8px rgba(136, 146, 168, 0.5);
+}
+
+.fair-conn-pill--ok {
+  border-color: rgba(60, 220, 140, 0.55);
+}
+
+.fair-conn-pill--ok strong {
+  color: #b8ffe0;
+}
+
+.fair-conn-pill--ok .fair-conn-pill__dot {
+  background: #3cdc8c;
+  box-shadow: 0 0 10px rgba(60, 220, 140, 0.75);
+}
+
+.fair-conn-pill--server {
+  border-color: rgba(0, 234, 255, 0.5);
+}
+
+.fair-conn-pill--server strong {
+  color: #9befff;
+}
+
+.fair-conn-pill--server .fair-conn-pill__dot {
+  background: #00eaff;
+  box-shadow: 0 0 10px rgba(0, 234, 255, 0.7);
+}
+
+.fair-conn-pill--down {
+  border-color: rgba(255, 112, 112, 0.55);
+}
+
+.fair-conn-pill--down strong {
+  color: #ffd0d0;
+}
+
+.fair-conn-pill--down .fair-conn-pill__dot {
+  background: #ff7070;
+  box-shadow: 0 0 10px rgba(255, 112, 112, 0.7);
 }
 
 .arcade-main--fair {
@@ -926,6 +1005,87 @@
   line-height: 1;
   color: #00eaff;
   text-shadow: 0 0 22px rgba(0, 234, 255, 0.65);
+}
+
+.fair-brand-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px 12px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b7c4e8;
+}
+
+.fair-brand-bar__sep {
+  opacity: 0.55;
+}
+
+.fair-return {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(0, 234, 255, 0.16), transparent 42%),
+    rgba(6, 3, 18, 0.88);
+  animation: fairWinnerIn 280ms ease-out;
+  pointer-events: none;
+}
+
+.fair-return__card {
+  text-align: center;
+  max-width: min(520px, 88vw);
+  padding: 28px 32px;
+  border-radius: 22px;
+  border: 2px solid rgba(255, 217, 61, 0.55);
+  background: linear-gradient(165deg, rgba(26, 14, 52, 0.96), rgba(10, 6, 24, 0.98));
+  box-shadow: 0 0 40px rgba(255, 217, 61, 0.28);
+}
+
+.fair-return__logo {
+  width: 120px;
+  margin: 0 auto 16px;
+  padding: 8px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.fair-return__logo img {
+  width: 100%;
+  display: block;
+}
+
+.fair-return__card h2 {
+  margin: 0 0 8px;
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #ffd93d;
+}
+
+.fair-return__title {
+  margin: 0 0 10px;
+  font-size: clamp(28px, 4.5vw, 44px);
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.03em;
+}
+
+.fair-return__sub {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9befff;
 }
 
 @keyframes fairIdleGlow {
