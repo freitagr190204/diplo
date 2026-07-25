@@ -769,18 +769,46 @@
   text-shadow: 0 0 24px rgba(0, 234, 255, 0.65);
 }
 
-.arcade-shell--fair .arcade-main {
-  grid-template-columns: 1fr;
-  justify-items: center;
+/* ——— Messemodus: brand + cabinet only ——— */
+.arcade-shell--fair {
+  padding: 12px 16px 20px;
+  gap: 8px;
 }
 
-.arcade-shell--fair .left-zone {
-  width: min(720px, 100%);
+.arcade-header--fair {
+  justify-content: center;
+}
+
+.school-logo--fair {
+  width: 88px;
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.brand-text--fair p {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #cfd8ff;
+}
+
+.arcade-main--fair {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  align-items: stretch;
+}
+
+.left-zone--fair {
+  width: min(920px, 100%);
   max-width: 100%;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 
 .arcade-shell--fair .left-zone__machine-row {
-  grid-template-columns: 1fr;
   justify-content: center;
 }
 
@@ -788,10 +816,139 @@
   display: none;
 }
 
-.arcade-shell--fair .cabinet-embed {
+.cabinet-embed--fair {
   width: 100%;
-  max-width: 640px;
+  max-width: min(860px, 96vw);
+  max-height: none;
+  height: 100%;
   margin-inline: auto;
+  pointer-events: auto;
+  border-radius: 18px;
+}
+
+.arcade-shell--fair-idle .cabinet-embed--fair {
+  animation: fairIdleGlow 3.2s ease-in-out infinite;
+}
+
+.fair-attract-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  z-index: 4;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 217, 61, 0.45);
+  background: rgba(8, 4, 22, 0.72);
+  color: #ffd93d;
+  font-size: clamp(13px, 1.8vw, 18px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fairHintPulse 2s ease-in-out infinite;
+}
+
+.fair-winner {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(4, 2, 14, 0.55);
+  animation: fairWinnerIn 320ms ease-out;
+}
+
+.fair-winner__card {
+  text-align: center;
+  max-width: min(420px, 78%);
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  border: 2px solid rgba(255, 217, 61, 0.7);
+  background: linear-gradient(165deg, rgba(28, 16, 58, 0.96), rgba(10, 6, 24, 0.98));
+  box-shadow: 0 0 36px rgba(255, 217, 61, 0.35), 0 0 48px rgba(0, 234, 255, 0.18);
+}
+
+.fair-winner__badge {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9befff;
+}
+
+.fair-winner__badge--win {
+  color: #ffd93d;
+  text-shadow: 0 0 12px rgba(255, 217, 61, 0.55);
+}
+
+.fair-winner__image,
+.fair-winner__fallback {
+  width: min(180px, 38vw);
+  aspect-ratio: 1 / 1;
+  margin: 0 auto 12px;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.fair-winner__image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.fair-winner__fallback {
+  display: grid;
+  place-items: center;
+  font-size: 64px;
+  font-weight: 900;
+  background: linear-gradient(145deg, #3956a7, #1d2f68);
+}
+
+.fair-winner__name {
+  margin: 0 0 8px;
+  font-size: clamp(20px, 3.2vw, 30px);
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.fair-winner__countdown {
+  font-size: clamp(40px, 8vw, 72px);
+  font-weight: 900;
+  line-height: 1;
+  color: #00eaff;
+  text-shadow: 0 0 22px rgba(0, 234, 255, 0.65);
+}
+
+@keyframes fairIdleGlow {
+  0%,
+  100% { filter: drop-shadow(0 0 0 rgba(0, 234, 255, 0)); }
+  50% { filter: drop-shadow(0 0 18px rgba(0, 234, 255, 0.28)); }
+}
+
+@keyframes fairHintPulse {
+  0%,
+  100% { opacity: 0.7; transform: translateX(-50%) scale(1); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1.03); }
+}
+
+@keyframes fairWinnerIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .game-card__image,

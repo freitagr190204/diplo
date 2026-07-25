@@ -1,11 +1,17 @@
-<div class="arcade-shell" [class.arcade-shell--fair]="fairMode()">
-  <header class="arcade-header">
+<div
+  class="arcade-shell"
+  [class.arcade-shell--fair]="fairMode()"
+  [class.arcade-shell--fair-idle]="fairMode() && isFairIdle()">
+  <header class="arcade-header" [class.arcade-header--fair]="fairMode()">
     <div class="brand-left">
-      <div class="school-logo">
+      <div class="school-logo" [class.school-logo--fair]="fairMode()">
         <img [src]="schoolLogoSrc" alt="HTL Logo" />
       </div>
-      <div class="brand-text">
+      <div class="brand-text" *ngIf="!fairMode()">
         <h1>DUAL ARCADE LAUNCHER</h1>
+        <p>HTL Grieskirchen</p>
+      </div>
+      <div class="brand-text brand-text--fair" *ngIf="fairMode()">
         <p>HTL Grieskirchen</p>
       </div>
     </div>
@@ -15,9 +21,9 @@
     </div>
   </header>
 
-  <main class="arcade-main">
-    <section class="left-zone">
-      <h2>ZUFALLSAUTOMAT</h2>
+  <main class="arcade-main" [class.arcade-main--fair]="fairMode()">
+    <section class="left-zone" [class.left-zone--fair]="fairMode()">
+      <h2 *ngIf="!fairMode()">ZUFALLSAUTOMAT</h2>
       <div
         class="left-zone__machine-row"
         *ngIf="mode() === 'random'">
@@ -43,7 +49,9 @@
         <div
           class="cabinet-embed"
           [class.cabinet-embed--shake]="isScreenShaking()"
-          [class.cabinet-embed--glow]="leverGlow()">
+          [class.cabinet-embed--glow]="leverGlow()"
+          [class.cabinet-embed--fair]="fairMode()"
+          (click)="onFairCabinetPressed()">
           <div class="cabinet-embed__inner">
             <div class="cabinet-stage">
               <div class="machine-image-crop" aria-hidden="true">
@@ -87,9 +95,32 @@
           </div>
           <div
             class="left-zone__countdown"
-            *ngIf="launchCountdown() !== null && (fairMode() || !showPickReveal())">
+            *ngIf="launchCountdown() !== null && !fairMode() && !showPickReveal()">
             <span>{{ launchCountdown() }}</span>
           </div>
+
+          <div
+            class="fair-winner"
+            *ngIf="fairMode() && showPickReveal() && slotResultGame() as picked">
+            <div class="fair-winner__card">
+              <p class="fair-winner__badge" *ngIf="isAttractDemo()">Vorschau</p>
+              <p class="fair-winner__badge fair-winner__badge--win" *ngIf="!isAttractDemo()">Gewonnen</p>
+              <div class="fair-winner__image" *ngIf="gameImageUrl(picked) && !imageBroken(picked); else fairPickFallback">
+                <img [src]="gameImageUrl(picked)!" [alt]="picked.name" (error)="onGameImageError(picked)" />
+              </div>
+              <ng-template #fairPickFallback>
+                <div class="fair-winner__fallback">{{ picked.name.charAt(0) }}</div>
+              </ng-template>
+              <p class="fair-winner__name">{{ picked.name }}</p>
+              <div class="fair-winner__countdown" *ngIf="!isAttractDemo() && launchCountdown() !== null">
+                {{ launchCountdown() }}
+              </div>
+            </div>
+          </div>
+
+          <p class="fair-attract-hint" *ngIf="fairMode() && isFairIdle()">
+            Druecke einen Knopf zum Spielen
+          </p>
         </div>
       </div>
       <div
@@ -152,7 +183,7 @@
     </section>
   </main>
 
-  <div class="bottom-bar">
+  <div class="bottom-bar" *ngIf="!fairMode()">
     <button type="button" class="start-btn" [disabled]="!canLaunchSelected() && !canLaunchRandom()" (click)="onPlayPressed()">
       {{ launchCountdown() !== null ? 'START IN ' + launchCountdown() : 'SPIEL STARTEN!' }}
     </button>
@@ -165,5 +196,5 @@
   </div>
 
   <div class="error-banner" *ngIf="gameError()">{{ gameErrorText() }}</div>
-  <div class="mock-banner" *ngIf="usingMockData()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
+  <div class="mock-banner" *ngIf="usingMockData() && !fairMode()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
 </div>

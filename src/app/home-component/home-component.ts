@@ -62,8 +62,10 @@ export class HomeComponent implements OnInit, OnDestroy {
   isScreenShaking = signal(false);
   /** Laufende Hervorhebung in der rechten Spielliste waehrend des Spins. */
   carouselHighlightIndex = signal<number | null>(null);
-  /** Grosses „Spiel ausgewählt“-Overlay in der rechten Spalte. */
+  /** Grosses „Spiel ausgewählt“-Overlay (volle UI rechts / Messe auf dem Automaten). */
   showPickReveal = signal(false);
+  /** Messemodus: laufende Attract-/Demo-Ziehung ohne echten Start. */
+  isAttractDemo = signal(false);
   /** True while the physical lever is animating (pull, hold, or spring return). */
   isPulling = signal(false);
   /**
@@ -111,6 +113,11 @@ export class HomeComponent implements OnInit, OnDestroy {
   private carouselSpinStartAt = 0;
   private carouselSpinTargetIndex = 0;
   private lastCarouselStepAt = 0;
+  /** Idle-Zeit bis zur Attract-Demo im Messemodus. */
+  private readonly attractIdleMs = 18000;
+  private readonly attractRevealMs = 4000;
+  private attractIdleTimeout: ReturnType<typeof setTimeout> | null = null;
+  private attractRevealTimeout: ReturnType<typeof setTimeout> | null = null;
   constructor() {
     effect(() => {
       const role = this.connectionRole();
@@ -129,6 +136,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.fairMode.set(isFair);
     if (isFair) {
       this.mode.set('random');
+      this.scheduleAttractIdle();
     }
     this.checkConnectionStatus();
     this.statusCheckInterval = setInterval(() => {
@@ -184,6 +192,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           return;
         }
         if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
+          this.cancelAttract();
           this.startRemoteLeverAndSpin({targetIndex: payload.targetIndex, seed: payload.seed});
         }
       });
@@ -215,6 +224,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
     this.stopTickSound();
     this.clearLeverTimeouts();
+    this.clearAttractTimers();
     this.stopGamepadLoop();
   }
 
@@ -313,6 +323,24 @@ export class HomeComponent implements OnInit, OnDestroy {
     return ip ? `Nicht verbunden (${ip})` : 'Nicht verbunden';
   }
 
+  protected isFairIdle(): boolean {
+    return (
+      this.fairMode() &&
+      !this.isSpinning() &&
+      !this.isPulling() &&
+      !this.showPickReveal() &&
+      this.launchCountdown() === null &&
+      !this.isAttractDemo()
+    );
+  }
+
+  protected onFairCabinetPressed() {
+    if (!this.fairMode()) {
+      return;
+    }
+    void this.onPlayPressed();
+  }
+
   protected setMode(mode: 'random' | 'manual') {
     if (this.fairMode() || this.isSpinning() || this.isPulling()) {
       return;
@@ -349,6 +377,17 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected async onPlayPressed() {
+    this.noteUserActivity();
+
+    if (this.isAttractDemo()) {
+      if (this.isSpinning() || this.isPulling()) {
+        return;
+      }
+      if (this.showPickReveal()) {
+        this.clearAttractReveal();
+      }
+    }
+
     if (this.isSpinning() || this.isPulling() || this.launchCountdown() !== null) {
       return;
     }
@@ -397,12 +436,17 @@ export class HomeComponent implements OnInit, OnDestroy {
   /**
    * Controller-driven: image frames idle → middle → down → (mech) → spin, then idle photo again.
    */
-  private startLeverPullSequence() {
+  private startLeverPullSequence(options?: {attract?: boolean}) {
     if (this.isPulling() || this.isSpinning() || this.launchCountdown() !== null) {
       return;
     }
     if (this.mode() !== 'random' || this.games().length === 0) {
       return;
+    }
+
+    const attract = options?.attract === true;
+    if (attract) {
+      this.isAttractDemo.set(true);
     }
 
     this.clearLeverTimeouts();
@@ -423,7 +467,14 @@ export class HomeComponent implements OnInit, OnDestroy {
     }, atBottomMs + 10);
 
     this.scheduleLever(() => {
-      void this.requestSyncedRandomSpin();
+      if (attract || this.isAttractDemo()) {
+        if (!this.runSyncedSpinLocalFallback()) {
+          this.isAttractDemo.set(false);
+          this.scheduleAttractIdle();
+        }
+      } else {
+        void this.requestSyncedRandomSpin();
+      }
       this.machineFrame.set('idle');
       this.isPulling.set(false);
     }, spinAtMs);
@@ -469,6 +520,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
     if (payload.error) {
       this.gameError.set(this.formatConnectionError(payload.error));
+      this.scheduleAttractIdle();
       return;
     }
     if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
@@ -476,13 +528,13 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
   }
 
-  private runSyncedSpinLocalFallback() {
+  private runSyncedSpinLocalFallback(): boolean {
     const gameList = this.games();
     if (!gameList.length) {
-      return;
+      return false;
     }
     const targetIndex = Math.floor(Math.random() * gameList.length);
-    this.runSyncedSpin({targetIndex, seed: Date.now() % 2147483646});
+    return this.runSyncedSpin({targetIndex, seed: Date.now() % 2147483646});
   }
 
   protected cabinetPhotoSrc(): string {
@@ -792,14 +844,20 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.stopTickSound();
         this.selectedGameIndex.set(targetIndex);
         this.currentGameName.set(targetGame.name);
-        this.recordRandomPick(targetGame);
+        if (!this.isAttractDemo()) {
+          this.recordRandomPick(targetGame);
+        }
         this.playWinnerFanfare();
         this.triggerScreenShake();
         this.isSpinning.set(false);
         this.lastCarouselScrollIdx = -1;
         this.carouselHighlightIndex.set(targetIndex);
         document.getElementById(`game-card-${targetIndex}`)?.scrollIntoView({block: 'nearest', behavior: 'auto'});
-        this.startLaunchCountdown(targetIndex);
+        if (this.isAttractDemo()) {
+          this.startAttractReveal();
+        } else {
+          this.startLaunchCountdown(targetIndex);
+        }
         return;
       }
 
@@ -896,6 +954,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     const h = this.reelItemHeight;
     this.reelOffsets.set([baseRow * h, baseRow * h, baseRow * h]);
     this.slotResultGame.set(null);
+    this.scheduleAttractIdle();
   }
 
   private recordRandomPick(game: GameEntry) {
@@ -991,10 +1050,102 @@ export class HomeComponent implements OnInit, OnDestroy {
           // @ts-ignore
           window.api.launchGameByIndex(gameIndex);
         }
+        this.scheduleAttractIdle();
         return;
       }
       this.launchCountdown.set(remaining);
     }, 1000);
+  }
+
+  private clearAttractTimers() {
+    if (this.attractIdleTimeout) {
+      clearTimeout(this.attractIdleTimeout);
+      this.attractIdleTimeout = null;
+    }
+    if (this.attractRevealTimeout) {
+      clearTimeout(this.attractRevealTimeout);
+      this.attractRevealTimeout = null;
+    }
+  }
+
+  private scheduleAttractIdle() {
+    if (!this.fairMode()) {
+      return;
+    }
+    if (this.attractIdleTimeout) {
+      clearTimeout(this.attractIdleTimeout);
+      this.attractIdleTimeout = null;
+    }
+    if (
+      this.isSpinning() ||
+      this.isPulling() ||
+      this.showPickReveal() ||
+      this.launchCountdown() !== null ||
+      this.isAttractDemo()
+    ) {
+      return;
+    }
+    this.attractIdleTimeout = setTimeout(() => {
+      this.attractIdleTimeout = null;
+      this.startAttractDemo();
+    }, this.attractIdleMs);
+  }
+
+  private startAttractDemo() {
+    if (!this.fairMode()) {
+      return;
+    }
+    if (
+      this.isSpinning() ||
+      this.isPulling() ||
+      this.showPickReveal() ||
+      this.launchCountdown() !== null ||
+      this.games().length === 0
+    ) {
+      this.scheduleAttractIdle();
+      return;
+    }
+    this.startLeverPullSequence({attract: true});
+  }
+
+  private startAttractReveal() {
+    this.showPickReveal.set(true);
+    this.launchCountdown.set(null);
+    if (this.attractRevealTimeout) {
+      clearTimeout(this.attractRevealTimeout);
+    }
+    this.attractRevealTimeout = setTimeout(() => {
+      this.attractRevealTimeout = null;
+      this.clearAttractReveal();
+      this.scheduleAttractIdle();
+    }, this.attractRevealMs);
+  }
+
+  private clearAttractReveal() {
+    if (this.attractRevealTimeout) {
+      clearTimeout(this.attractRevealTimeout);
+      this.attractRevealTimeout = null;
+    }
+    this.showPickReveal.set(false);
+    this.isAttractDemo.set(false);
+  }
+
+  private cancelAttract() {
+    this.clearAttractTimers();
+    if (this.isAttractDemo() && !this.isSpinning() && !this.isPulling()) {
+      this.showPickReveal.set(false);
+      this.isAttractDemo.set(false);
+    }
+  }
+
+  private noteUserActivity() {
+    if (!this.fairMode()) {
+      return;
+    }
+    if (this.attractIdleTimeout) {
+      clearTimeout(this.attractIdleTimeout);
+      this.attractIdleTimeout = null;
+    }
   }
 
   private triggerScreenShake() {
