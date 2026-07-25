@@ -30,7 +30,7 @@ type ReelRuntime = {
 })
 export class HomeComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
-  /** Messe-/Show-UI ohne Status, Trefferliste und Tasten-Hinweise. */
+  /** Messe-/Show-UI: nur Slot, ohne manuelle Auswahl, Status und Trefferliste. */
   fairMode = signal(false);
   schoolLogoSrc = 'htl-grieskirchen-logo.png';
   isConnected = signal(false);
@@ -125,7 +125,11 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
-    this.fairMode.set(this.route.snapshot.data['fairMode'] === true);
+    const isFair = this.route.snapshot.data['fairMode'] === true;
+    this.fairMode.set(isFair);
+    if (isFair) {
+      this.mode.set('random');
+    }
     this.checkConnectionStatus();
     this.statusCheckInterval = setInterval(() => {
       this.checkConnectionStatus();
@@ -310,14 +314,14 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected setMode(mode: 'random' | 'manual') {
-    if (this.isSpinning() || this.isPulling()) {
+    if (this.fairMode() || this.isSpinning() || this.isPulling()) {
       return;
     }
     this.mode.set(mode);
   }
 
   protected selectGame(index: number) {
-    if (this.isSpinning() || this.isPulling()) {
+    if (this.fairMode() || this.isSpinning() || this.isPulling()) {
       return;
     }
     if (index >= 0 && index < this.games().length) {
@@ -1256,54 +1260,56 @@ export class HomeComponent implements OnInit, OnDestroy {
     handleButtonEdgeAny(3, play);
     handleButtonEdgeAny(9, play);
 
-    // D‑Pad – Mode (left/right) und Spielauswahl (up/down)
-    handleButtonEdgeAny(14, () => {
-      const nextMode = this.mode() === 'random' ? 'manual' : 'random';
-      this.setMode(nextMode);
-    });
-    handleButtonEdgeAny(15, () => {
-      const nextMode = this.mode() === 'random' ? 'manual' : 'random';
-      this.setMode(nextMode);
-    });
-    handleButtonEdgeAny(12, () => {
-      if (this.mode() === 'manual' && this.games().length > 0) {
-        const current = this.selectedGameIndex() ?? 0;
-        const count = this.games().length;
-        const next = (current - 1 + count) % count;
-        this.selectedGameIndex.set(next);
-      }
-    });
-    handleButtonEdgeAny(13, () => {
-      if (this.mode() === 'manual' && this.games().length > 0) {
-        const current = this.selectedGameIndex() ?? 0;
-        const count = this.games().length;
-        const next = (current + 1) % count;
-        this.selectedGameIndex.set(next);
-      }
-    });
-
-    // Left joystick navigation (arcade lever support) with cooldown.
-    const now = performance.now();
-    if (now - this.lastAxisNavigateAt >= 180) {
-      const leftPressed = pads.some((pad) => (pad.axes?.[0] ?? 0) <= -0.6);
-      const rightPressed = pads.some((pad) => (pad.axes?.[0] ?? 0) >= 0.6);
-      const upPressed = pads.some((pad) => (pad.axes?.[1] ?? 0) <= -0.6);
-      const downPressed = pads.some((pad) => (pad.axes?.[1] ?? 0) >= 0.6);
-
-      if (leftPressed || rightPressed) {
+    // D‑Pad – Mode (left/right) und Spielauswahl (up/down); Messemodus bleibt Slot-only.
+    if (!this.fairMode()) {
+      handleButtonEdgeAny(14, () => {
         const nextMode = this.mode() === 'random' ? 'manual' : 'random';
         this.setMode(nextMode);
-        this.lastAxisNavigateAt = now;
-      } else if (upPressed && this.mode() === 'manual' && this.games().length > 0) {
-        const current = this.selectedGameIndex() ?? 0;
-        const count = this.games().length;
-        this.selectedGameIndex.set((current - 1 + count) % count);
-        this.lastAxisNavigateAt = now;
-      } else if (downPressed && this.mode() === 'manual' && this.games().length > 0) {
-        const current = this.selectedGameIndex() ?? 0;
-        const count = this.games().length;
-        this.selectedGameIndex.set((current + 1) % count);
-        this.lastAxisNavigateAt = now;
+      });
+      handleButtonEdgeAny(15, () => {
+        const nextMode = this.mode() === 'random' ? 'manual' : 'random';
+        this.setMode(nextMode);
+      });
+      handleButtonEdgeAny(12, () => {
+        if (this.mode() === 'manual' && this.games().length > 0) {
+          const current = this.selectedGameIndex() ?? 0;
+          const count = this.games().length;
+          const next = (current - 1 + count) % count;
+          this.selectedGameIndex.set(next);
+        }
+      });
+      handleButtonEdgeAny(13, () => {
+        if (this.mode() === 'manual' && this.games().length > 0) {
+          const current = this.selectedGameIndex() ?? 0;
+          const count = this.games().length;
+          const next = (current + 1) % count;
+          this.selectedGameIndex.set(next);
+        }
+      });
+
+      // Left joystick navigation (arcade lever support) with cooldown.
+      const now = performance.now();
+      if (now - this.lastAxisNavigateAt >= 180) {
+        const leftPressed = pads.some((pad) => (pad.axes?.[0] ?? 0) <= -0.6);
+        const rightPressed = pads.some((pad) => (pad.axes?.[0] ?? 0) >= 0.6);
+        const upPressed = pads.some((pad) => (pad.axes?.[1] ?? 0) <= -0.6);
+        const downPressed = pads.some((pad) => (pad.axes?.[1] ?? 0) >= 0.6);
+
+        if (leftPressed || rightPressed) {
+          const nextMode = this.mode() === 'random' ? 'manual' : 'random';
+          this.setMode(nextMode);
+          this.lastAxisNavigateAt = now;
+        } else if (upPressed && this.mode() === 'manual' && this.games().length > 0) {
+          const current = this.selectedGameIndex() ?? 0;
+          const count = this.games().length;
+          this.selectedGameIndex.set((current - 1 + count) % count);
+          this.lastAxisNavigateAt = now;
+        } else if (downPressed && this.mode() === 'manual' && this.games().length > 0) {
+          const current = this.selectedGameIndex() ?? 0;
+          const count = this.games().length;
+          this.selectedGameIndex.set((current + 1) % count);
+          this.lastAxisNavigateAt = now;
+        }
       }
     }
   }
@@ -1320,7 +1326,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'ArrowLeft' || key === 'ArrowRight') {
-      if (this.isSpinning() || this.isPulling()) {
+      if (this.fairMode() || this.isSpinning() || this.isPulling()) {
         return;
       }
       const nextMode = this.mode() === 'random' ? 'manual' : 'random';
@@ -1330,7 +1336,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'ArrowUp' || key === 'ArrowDown') {
-      if (this.isSpinning() || this.isPulling()) {
+      if (this.fairMode() || this.isSpinning() || this.isPulling()) {
         return;
       }
       if (this.mode() === 'manual' && this.games().length > 0) {

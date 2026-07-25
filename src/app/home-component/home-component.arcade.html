@@ -85,14 +85,16 @@
               </div>
             </div>
           </div>
-          <div class="left-zone__countdown" *ngIf="launchCountdown() !== null && !showPickReveal()">
+          <div
+            class="left-zone__countdown"
+            *ngIf="launchCountdown() !== null && (fairMode() || !showPickReveal())">
             <span>{{ launchCountdown() }}</span>
           </div>
         </div>
       </div>
       <div
         class="cabinet-embed"
-        *ngIf="mode() === 'manual'"
+        *ngIf="mode() === 'manual' && !fairMode()"
         [class.cabinet-embed--shake]="isScreenShaking()"
         [class.cabinet-embed--glow]="leverGlow()">
         <div class="cabinet-embed__inner">
@@ -111,7 +113,7 @@
       <p class="machine-note" *ngIf="!fairMode()">Der Automat waehlt ein Spiel fuer beide Stationen (nur im Zufallsmodus).</p>
     </section>
 
-    <section class="right-zone">
+    <section class="right-zone" *ngIf="!fairMode()">
       <h2>SPIELAUSWAHL</h2>
       <div class="right-zone__body">
         <div class="game-grid" [class.game-grid--dimmed]="showPickReveal()" [class.game-grid--spinning]="isSpinning()">

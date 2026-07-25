@@ -769,12 +769,29 @@
   text-shadow: 0 0 24px rgba(0, 234, 255, 0.65);
 }
 
+.arcade-shell--fair .arcade-main {
+  grid-template-columns: 1fr;
+  justify-items: center;
+}
+
+.arcade-shell--fair .left-zone {
+  width: min(720px, 100%);
+  max-width: 100%;
+}
+
 .arcade-shell--fair .left-zone__machine-row {
   grid-template-columns: 1fr;
+  justify-content: center;
 }
 
 .arcade-shell--fair .slot-payout {
   display: none;
+}
+
+.arcade-shell--fair .cabinet-embed {
+  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
 }
 
 .game-card__image,
