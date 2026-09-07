@@ -381,12 +381,9 @@ ipcMain.on('launchGame', async (event, gameIndex) => {
     console.log('Client: sending launch command request to server with index:', gameIndex);
     clientSocket.emit('launchGame', gameIndex);
   } else if (isServer && serverSocket) {
-    const clientCount = serverSocket.sockets?.sockets?.size ?? 0;
+    const clientCount = getLinkedClientCount();
     if (clientCount === 0) {
-      notifyGameError(
-        'Kein zweiter Automat verbunden: Auf PC 1 (Server, 192.168.10.1) laeuft der Launcher, aber PC 2 (Client, 192.168.10.2) ist noch nicht verbunden. Bitte auch dort den Launcher starten und auf „verbunden“ warten, bevor ein Spiel gestartet wird.'
-      );
-      return;
+      console.warn('Server launch: no Socket.IO client counted — launching anyway and broadcasting.');
     }
     if (!GAMES.length) {
       console.error('No games configured in GAMES array');
@@ -555,8 +552,18 @@ ipcMain.handle('disconnect', async (event) => {
 });
 
 function getLinkedClientCount() {
-  if (isServer && serverSocket?.sockets?.sockets) {
-    return serverSocket.sockets.sockets.size;
+  if (!isServer || !serverSocket) {
+    return 0;
+  }
+  const namespace = serverSocket.sockets;
+  if (namespace?.sockets instanceof Map) {
+    return namespace.sockets.size;
+  }
+  if (namespace instanceof Map) {
+    return namespace.size;
+  }
+  if (typeof serverSocket.engine?.clientsCount === 'number') {
+    return Math.max(0, serverSocket.engine.clientsCount);
   }
   return 0;
 }

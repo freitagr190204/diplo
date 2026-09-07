@@ -19,6 +19,9 @@
     <div class="status-pills" *ngIf="!fairMode()">
       <div class="pill"><span>Verbindung</span><strong>{{ connectionStatusLabel() }}</strong></div>
       <div class="pill"><span>Status</span><strong>{{ statusMessage() }}</strong></div>
+      <div class="pill" *ngIf="connectionRole() === 'server'">
+        <span>Clients</span><strong>{{ linkedClientCount() }}</strong>
+      </div>
     </div>
     <div
       class="fair-conn-pill"

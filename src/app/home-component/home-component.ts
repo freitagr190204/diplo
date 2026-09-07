@@ -126,8 +126,11 @@ export class HomeComponent implements OnInit, OnDestroy {
   constructor() {
     effect(() => {
       const role = this.connectionRole();
+      const linkedClients = this.linkedClientCount();
       if (role === 'server') {
-        this.statusMessage.set('Warte auf zweiten Automaten...');
+        this.statusMessage.set(
+          linkedClients > 0 ? 'Client verbunden — bereit' : 'Warte auf zweiten Automaten...'
+        );
       } else if (role === 'client') {
         this.statusMessage.set('Mit Server verbunden');
       } else {
@@ -1117,8 +1120,13 @@ export class HomeComponent implements OnInit, OnDestroy {
           this.launchCountdownInterval = null;
         }
         if (!this.usingMockData()) {
-          // @ts-ignore
-          window.api.launchGameByIndex(gameIndex);
+          // Only the server PC starts games — it runs locally and tells the client via Socket.IO.
+          const isServer =
+            this.connectionRole() === 'server' || this.localRole() === 'server';
+          if (isServer) {
+            // @ts-ignore
+            window.api.launchGameByIndex(gameIndex);
+          }
         }
         this.scheduleAttractIdle();
         return;
@@ -1353,7 +1361,6 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.isConnected.set(true);
         if (result.role === 'server') {
           this.hasServer.set(true);
-          this.statusMessage.set('Warte auf zweiten Automaten...');
         } else {
           this.isClient.set(true);
           this.statusMessage.set('Mit Server verbunden');
