@@ -115,14 +115,57 @@ const SOCKET_PORT = 4203;
 
 function getLocalIPv4() {
   const nets = os.networkInterfaces();
+  const candidates = [];
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
+        candidates.push(net.address);
       }
     }
   }
-  return null;
+  const arcadeIp = candidates.find((a) => a === SERVER_IP || a === CLIENT_IP);
+  if (arcadeIp) {
+    return arcadeIp;
+  }
+  const arcadeSubnet = candidates.find((a) => a.startsWith('192.168.10.'));
+  if (arcadeSubnet) {
+    return arcadeSubnet;
+  }
+  return candidates[0] || null;
+}
+
+/** Resolve L2/L3 neighbor (ARP) before Socket.IO — avoids needing a manual ping on cold links. */
+function warmupPeerNetwork(host, attempts = 2) {
+  return new Promise((resolve) => {
+    if (!host || process.platform !== 'win32') {
+      resolve();
+      return;
+    }
+    let remaining = attempts;
+    const runPing = () => {
+      const args = ['-n', '1', '-w', '800', host];
+      const proc = spawn('ping', args, { stdio: 'ignore' });
+      const done = () => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          resolve();
+        } else {
+          setTimeout(runPing, 200);
+        }
+      };
+      proc.on('close', done);
+      proc.on('error', done);
+      setTimeout(() => {
+        try {
+          proc.kill();
+        } catch (_) {
+          /* ignore */
+        }
+        done();
+      }, 1500);
+    };
+    runPing();
+  });
 }
 
 function getRoleByIP() {
@@ -636,6 +679,7 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
       connectionStatus = 'server';
       setupServerListeners();
       console.log('Server created on port', portNum, '(this PC is 192.168.10.1)');
+      warmupPeerNetwork(CLIENT_IP).catch(() => {});
       return { success: true, role: 'server', port: portNum };
     } catch (e) {
       console.error('Error creating server:', e);
@@ -644,63 +688,56 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
   }
 
   if (roleByIP === 'client') {
+    await warmupPeerNetwork(SERVER_IP);
     return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+
       clientSocket = io(serverUrl, {
         reconnection: true,
         reconnectionDelay: 1000,
-        reconnectionAttempts: 5,
-        timeout: 5000
+        reconnectionAttempts: 20,
+        timeout: 8000
       });
       isClient = true;
       isServer = false;
       connectionStatus = 'client';
       setupClientListeners();
 
-      const onConnect = () => {
-        clientSocket.off('connect', onConnect);
-        clientSocket.off('connect_error', onError);
-        resolve({ success: true, role: 'client', url: serverUrl });
-      };
-      const onError = (err) => {
-        clientSocket.off('connect', onConnect);
-        clientSocket.off('connect_error', onError);
-        clientSocket.close();
-        clientSocket = null;
-        isClient = false;
-        connectionStatus = 'disconnected';
-        resolve({
-          success: false,
-          error:
-            'Verbindung fehlgeschlagen: ' +
-            (err?.message || 'Server (192.168.10.1) nicht erreichbar') +
-            '. Pruefen Sie, ob der Launcher auf PC 1 laeuft, ob beide PCs im gleichen Netz (192.168.10.x) sind und ob Port ' +
-            portNum +
-            ' in der Firewall erlaubt ist.'
-        });
-      };
+      clientSocket.on('connect_error', (err) => {
+        console.error('Connection error (retrying):', err?.message || err);
+      });
 
-      clientSocket.once('connect', onConnect);
-      clientSocket.once('connect_error', onError);
+      clientSocket.once('connect', () => {
+        settle({ success: true, role: 'client', url: serverUrl });
+      });
 
       setTimeout(() => {
-        if (clientSocket && !clientSocket.connected) {
-          clientSocket.off('connect', onConnect);
-          clientSocket.off('connect_error', onError);
+        if (clientSocket?.connected) {
+          return;
+        }
+        if (clientSocket) {
           clientSocket.close();
           clientSocket = null;
-          isClient = false;
-          connectionStatus = 'disconnected';
-          resolve({
-            success: false,
-            error:
-              'Verbindungs-Timeout (6 s): Dieser PC (192.168.10.2) hat innerhalb von 6 Sekunden keine Antwort vom Server-PC (192.168.10.1) auf Port ' +
-              portNum +
-              ' erhalten. Bitte zuerst den Launcher auf dem Server-PC starten, LAN-Kabel pruefen und die Windows-Firewall fuer Port ' +
-              portNum +
-              ' freigeben.'
-          });
         }
-      }, 6000);
+        isClient = false;
+        connectionStatus = 'disconnected';
+        settle({
+          success: false,
+          error:
+            'Verbindungs-Timeout (20 s): Dieser PC (192.168.10.2) hat innerhalb von 20 Sekunden keine stabile Verbindung zum Server-PC (192.168.10.1) auf Port ' +
+            portNum +
+            ' erhalten. Bitte zuerst den Launcher auf dem Server-PC starten, LAN-Kabel pruefen und die Windows-Firewall fuer Port ' +
+            portNum +
+            ' freigeben.'
+        });
+      }, 20000);
     });
   }
 
