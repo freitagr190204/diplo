@@ -40,6 +40,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   serverUrl = signal('192.168.10.1:4203');
   serverPort = signal('4203');
   connectionRole = signal<'server' | 'client' | 'disconnected'>('disconnected');
+  linkedClientCount = signal(0);
   statusMessage = signal('Nicht verbunden');
   localIp = signal<string | null>(null);
   localRole = signal<'server' | 'client' | 'unknown'>('unknown');
@@ -255,6 +256,7 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.isConnected.set(status.status !== 'disconnected');
         this.hasServer.set(status.isServer);
         this.isClient.set(status.isClient);
+        this.linkedClientCount.set(status.linkedClientCount ?? 0);
       }
     } catch (e) {
       console.error('Error checking status:', e);
@@ -341,6 +343,21 @@ export class HomeComponent implements OnInit, OnDestroy {
     return ip ? `Nicht verbunden (${ip})` : 'Nicht verbunden';
   }
 
+  /** Both cabinets linked and ready for a synced spin (demo mode always ok). */
+  protected isPairReady(): boolean {
+    if (this.usingMockData()) {
+      return true;
+    }
+    const role = this.connectionRole();
+    if (role === 'client') {
+      return this.isConnected();
+    }
+    if (role === 'server') {
+      return this.linkedClientCount() > 0;
+    }
+    return false;
+  }
+
   /** Compact fair-mode pill label (no IP clutter). */
   protected fairConnectionLabel(): string {
     const role = this.connectionRole();
@@ -348,14 +365,14 @@ export class HomeComponent implements OnInit, OnDestroy {
       return 'Verbunden';
     }
     if (role === 'server') {
-      return 'Server';
+      return this.linkedClientCount() > 0 ? 'Beide bereit' : 'Warte auf Client';
     }
     return 'Offline';
   }
 
   protected fairConnectionTone(): 'ok' | 'server' | 'down' {
     const role = this.connectionRole();
-    if (role === 'client') {
+    if (role === 'client' || (role === 'server' && this.linkedClientCount() > 0)) {
       return 'ok';
     }
     if (role === 'server') {
@@ -402,6 +419,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   protected canLaunchRandom() {
     return (
       this.games().length > 0 &&
+      this.isPairReady() &&
       !this.isSpinning() &&
       !this.isPulling() &&
       this.launchCountdown() === null
@@ -411,6 +429,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   protected canLaunchSelected() {
     return (
       this.games().length > 0 &&
+      this.isPairReady() &&
       this.selectedGameIndex() !== null &&
       !this.isSpinning() &&
       !this.isPulling() &&
@@ -493,6 +512,11 @@ export class HomeComponent implements OnInit, OnDestroy {
     const attract = options?.attract === true;
     if (attract) {
       this.isAttractDemo.set(true);
+    } else if (!this.isPairReady()) {
+      this.gameError.set(this.formatConnectionError(
+        'Kein zweiter Automat verbunden: Bitte zuerst den Launcher auf PC 2 (192.168.10.2) starten und warten, bis „Beide bereit“ bzw. „Verbunden“ angezeigt wird.'
+      ));
+      return;
     }
 
     this.clearLeverTimeouts();

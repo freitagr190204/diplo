@@ -554,8 +554,22 @@ ipcMain.handle('disconnect', async (event) => {
   return { success: true };
 });
 
+function getLinkedClientCount() {
+  if (isServer && serverSocket?.sockets?.sockets) {
+    return serverSocket.sockets.sockets.size;
+  }
+  return 0;
+}
+
 ipcMain.handle('getConnectionStatus', async () => {
-  return { status: connectionStatus, isServer, isClient };
+  const linkedClientCount = getLinkedClientCount();
+  return {
+    status: connectionStatus,
+    isServer,
+    isClient,
+    linkedClientCount,
+    pairReady: (isClient && clientSocket?.connected) || (isServer && linkedClientCount > 0),
+  };
 });
 
 ipcMain.on('quitApp', () => {
@@ -760,6 +774,12 @@ ipcMain.handle('beginRandomSpin', async () => {
   }
 
   if (isServer) {
+    if (getLinkedClientCount() === 0) {
+      return {
+        error:
+          'Kein zweiter Automat verbunden: Auf PC 1 (Server, 192.168.10.1) laeuft der Launcher, aber PC 2 (Client, 192.168.10.2) ist noch nicht verbunden. Bitte auch dort den Launcher starten und auf „verbunden“ warten, bevor ein Spiel gestartet wird.'
+      };
+    }
     const payload = generateSlotSpinPayload();
     if (!payload) {
       return { error: 'Keine Spiele geladen — Spin nicht moeglich.' };

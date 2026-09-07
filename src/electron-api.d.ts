@@ -28,6 +28,8 @@ export interface ElectronApi {
     status: 'server' | 'client' | 'disconnected';
     isServer: boolean;
     isClient: boolean;
+    linkedClientCount: number;
+    pairReady: boolean;
   }>;
   getLocalNetworkInfo: () => Promise<{ ip: string; role: 'server' | 'client' | 'unknown' }>;
   autoConnect: (
