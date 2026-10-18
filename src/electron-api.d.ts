@@ -19,6 +19,8 @@ export interface ElectronApi {
   onGameSelected: (callback: (payload: unknown) => void) => void;
   onGameError: (callback: (payload: unknown) => void) => void;
   closeGame: () => void;
+  onGameStarted: (callback: (payload: unknown) => void) => void;
+  onGameClosed: (callback: () => void) => void;
   createServerWithPort: (port: string) => Promise<{ success: boolean }>;
   stopWsServer: () => Promise<unknown>;
   connectWithUrl: (url: string) => Promise<{ success: boolean }>;
@@ -27,6 +29,9 @@ export interface ElectronApi {
     status: 'server' | 'client' | 'disconnected';
     isServer: boolean;
     isClient: boolean;
+    linkedClientCount: number;
+    pairReady: boolean;
+    gameSessionActive?: boolean;
   }>;
   getLocalNetworkInfo: () => Promise<{ ip: string; role: 'server' | 'client' | 'unknown' }>;
   autoConnect: (
