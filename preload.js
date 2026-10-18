@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   closeGame: () => ipcRenderer.send('closeGame'),
+  onGameStarted: (callback) => {
+    ipcRenderer.on('gameStarted', (_event, payload) => {
+      if (typeof callback === 'function') {
+        callback(payload);
+      }
+    });
+  },
   onGameClosed: (callback) => {
     ipcRenderer.on('gameClosed', () => {
       if (typeof callback === 'function') {

@@ -69,6 +69,10 @@ export class HomeComponent implements OnInit, OnDestroy {
   isAttractDemo = signal(false);
   /** Kurz nach Spielende: beide Automaten wieder im Launcher. */
   showReturnOverlay = signal(false);
+  /** True while a game process is running — no second spin/launch. */
+  gameSessionActive = signal(false);
+  /** Messemodus: Slot-Sounds stumm (nur per Mausklick). */
+  soundsMuted = signal(false);
   /** True while the physical lever is animating (pull, hold, or spring return). */
   isPulling = signal(false);
   /**
@@ -146,6 +150,11 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.mode.set('random');
       this.scheduleAttractIdle();
     }
+    try {
+      this.soundsMuted.set(localStorage.getItem('arcade-sound-muted') === '1');
+    } catch {
+      this.soundsMuted.set(false);
+    }
     this.checkConnectionStatus();
     this.statusCheckInterval = setInterval(() => {
       this.checkConnectionStatus();
@@ -181,7 +190,19 @@ export class HomeComponent implements OnInit, OnDestroy {
         const message = typeof payload === 'string' ? payload : payload?.message;
         if (message) {
           this.gameError.set(message);
+          this.gameSessionActive.set(false);
         }
+      });
+    }
+
+    // @ts-ignore
+    if (window.api?.onGameStarted) {
+      // @ts-ignore
+      window.api.onGameStarted(() => {
+        this.gameSessionActive.set(true);
+        this.cancelAttract();
+        this.showPickReveal.set(false);
+        this.launchCountdown.set(null);
       });
     }
 
@@ -206,7 +227,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           }
           return;
         }
-        if (this.isSpinning() || this.isPulling() || this.launchCountdown() !== null) {
+        if (this.isSpinning() || this.isPulling() || this.launchCountdown() !== null || this.gameSessionActive()) {
           return;
         }
         if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
@@ -260,6 +281,9 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.hasServer.set(status.isServer);
         this.isClient.set(status.isClient);
         this.linkedClientCount.set(status.linkedClientCount ?? 0);
+        if (typeof status.gameSessionActive === 'boolean') {
+          this.gameSessionActive.set(status.gameSessionActive);
+        }
       }
     } catch (e) {
       console.error('Error checking status:', e);
@@ -272,7 +296,7 @@ export class HomeComponent implements OnInit, OnDestroy {
       const games = await window.api.getGames();
       if (Array.isArray(games)) {
         if (games.length > 0) {
-          this.games.set([...games]);
+          this.games.set(games.filter((g) => !/jumpandrun|superstickman|stickman/i.test(`${g.name} ${g.batchPath}`)));
           this.usingMockData.set(false);
           this.selectedGameIndex.set(0);
           this.setupReels();
@@ -328,7 +352,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           }
           this.statusMessage.set('Verbinden... (erneut)');
           this.autoConnect();
-        }, 5000);
+        }, 3000);
       }
     });
   }
@@ -370,7 +394,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     if (role === 'server') {
       return this.linkedClientCount() > 0 ? 'Beide bereit' : 'Warte auf Client';
     }
-    return 'Offline';
+    return 'Nicht verbunden';
   }
 
   protected fairConnectionTone(): 'ok' | 'server' | 'down' {
@@ -392,7 +416,29 @@ export class HomeComponent implements OnInit, OnDestroy {
       !this.showPickReveal() &&
       !this.showReturnOverlay() &&
       this.launchCountdown() === null &&
-      !this.isAttractDemo()
+      !this.isAttractDemo() &&
+      !this.gameSessionActive()
+    );
+  }
+
+  protected toggleSoundEffects(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = !this.soundsMuted();
+    this.soundsMuted.set(next);
+    try {
+      localStorage.setItem('arcade-sound-muted', next ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }
+
+  private isLaunchLocked(): boolean {
+    return (
+      this.gameSessionActive() ||
+      this.isSpinning() ||
+      this.isPulling() ||
+      this.launchCountdown() !== null
     );
   }
 
@@ -425,7 +471,8 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.isPairReady() &&
       !this.isSpinning() &&
       !this.isPulling() &&
-      this.launchCountdown() === null
+      this.launchCountdown() === null &&
+      !this.gameSessionActive()
     );
   }
 
@@ -436,14 +483,15 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.selectedGameIndex() !== null &&
       !this.isSpinning() &&
       !this.isPulling() &&
-      this.launchCountdown() === null
+      this.launchCountdown() === null &&
+      !this.gameSessionActive()
     );
   }
 
   protected async onPlayPressed() {
     this.noteUserActivity();
 
-    if (this.showReturnOverlay()) {
+    if (this.showReturnOverlay() || this.gameSessionActive()) {
       return;
     }
 
@@ -482,6 +530,7 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.startLaunchCountdown(index);
         return;
       }
+      this.gameSessionActive.set(true);
       // @ts-ignore
       window.api.launchGameByIndex(index);
     } else {
@@ -505,7 +554,7 @@ export class HomeComponent implements OnInit, OnDestroy {
    * Controller-driven: image frames idle → middle → down → (mech) → spin, then idle photo again.
    */
   private startLeverPullSequence(options?: {attract?: boolean}) {
-    if (this.isPulling() || this.isSpinning() || this.launchCountdown() !== null) {
+    if (this.isPulling() || this.isSpinning() || this.launchCountdown() !== null || this.gameSessionActive()) {
       return;
     }
     if (this.mode() !== 'random' || this.games().length === 0) {
@@ -592,6 +641,9 @@ export class HomeComponent implements OnInit, OnDestroy {
       return;
     }
     if (payload.error) {
+      if (/Spiel laeuft bereits/i.test(payload.error)) {
+        return;
+      }
       this.gameError.set(this.formatConnectionError(payload.error));
       this.scheduleAttractIdle();
       return;
@@ -649,8 +701,8 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
     if (/Verbindungs-Timeout|Connection timeout/i.test(t)) {
       return (
-        'Verbindungs-Timeout (6 s): Dieser PC konnte den Server-PC (192.168.10.1) auf Port 4203 nicht erreichen. ' +
-        'Ursache oft: Server-Launcher noch nicht gestartet, falsches Netzwerk (192.168.10.x), Kabel/WLAN getrennt oder Windows-Firewall blockiert Port 4203.'
+        'Verbindungs-Timeout: Dieser PC konnte den Server-PC (192.168.10.1) auf Port 4203 nicht erreichen. ' +
+        'Bitte zuerst den Server-PC (.1) starten, 30 Sekunden warten, dann den Client (.2). WLAN aus, Kabel pruefen, Firewall Port 4203.'
       );
     }
     if (/Verbindung fehlgeschlagen|Could not reach server/i.test(t)) {
@@ -673,7 +725,25 @@ export class HomeComponent implements OnInit, OnDestroy {
     return raw ? this.formatConnectionError(raw) : '';
   }
 
+  private bundledCoverSrc(game: GameEntry | null): string | null {
+    if (!game?.name) {
+      return null;
+    }
+    const key = game.name.toLowerCase().replace(/[\s_-]+/g, '');
+    if (key.includes('pacman')) {
+      return 'covers/pacman.png';
+    }
+    if (key.includes('space')) {
+      return 'covers/spacegame.png';
+    }
+    return null;
+  }
+
   protected gameImageUrl(game: GameEntry | null): string | null {
+    const bundled = this.bundledCoverSrc(game);
+    if (bundled && !this.brokenImageMap()[bundled]) {
+      return bundled;
+    }
     if (!game?.imagePath) {
       return null;
     }
@@ -692,18 +762,20 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected imageBroken(game: GameEntry | null): boolean {
-    if (!game?.imagePath) {
-      return false;
+    const url = this.gameImageUrl(game);
+    if (!url) {
+      return !this.bundledCoverSrc(game) && !game?.imagePath;
     }
-    return !!this.brokenImageMap()[game.imagePath];
+    return !!this.brokenImageMap()[url] || !!(game?.imagePath && this.brokenImageMap()[game.imagePath]);
   }
 
   protected onGameImageError(game: GameEntry | null) {
-    if (!game?.imagePath) {
+    const url = this.gameImageUrl(game);
+    if (!url) {
       return;
     }
     const next = {...this.brokenImageMap()};
-    next[game.imagePath] = true;
+    next[url] = true;
     this.brokenImageMap.set(next);
   }
 
@@ -1119,16 +1191,14 @@ export class HomeComponent implements OnInit, OnDestroy {
           clearInterval(this.launchCountdownInterval);
           this.launchCountdownInterval = null;
         }
-        if (!this.usingMockData()) {
-          // Only the server PC starts games — it runs locally and tells the client via Socket.IO.
-          const isServer =
-            this.connectionRole() === 'server' || this.localRole() === 'server';
-          if (isServer) {
-            // @ts-ignore
-            window.api.launchGameByIndex(gameIndex);
-          }
+        if (this.usingMockData()) {
+          this.gameError.set(
+            'Demo-Modus: Keine games.txt gefunden — es wird kein echtes Spiel gestartet.'
+          );
+        } else {
+          this.gameSessionActive.set(true);
+          window.api?.launchGameByIndex(gameIndex);
         }
-        this.scheduleAttractIdle();
         return;
       }
       this.launchCountdown.set(remaining);
@@ -1160,7 +1230,8 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.showPickReveal() ||
       this.showReturnOverlay() ||
       this.launchCountdown() !== null ||
-      this.isAttractDemo()
+      this.isAttractDemo() ||
+      this.gameSessionActive()
     ) {
       return;
     }
@@ -1180,6 +1251,7 @@ export class HomeComponent implements OnInit, OnDestroy {
       this.showPickReveal() ||
       this.showReturnOverlay() ||
       this.launchCountdown() !== null ||
+      this.gameSessionActive() ||
       this.games().length === 0
     ) {
       this.scheduleAttractIdle();
@@ -1229,6 +1301,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private onGameSessionClosed() {
+    this.gameSessionActive.set(false);
     this.cancelAttract();
     this.showPickReveal.set(false);
     this.launchCountdown.set(null);
@@ -1306,6 +1379,9 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private playTickSound(freq = 1100, peakGain = 0.06, durationSec = 0.055) {
+    if (this.soundsMuted()) {
+      return;
+    }
     const ctx = this.ensureAudioContext();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -1323,6 +1399,9 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private playWinnerFanfare() {
+    if (this.soundsMuted()) {
+      return;
+    }
     const ctx = this.ensureAudioContext();
     if (!ctx) return;
     const notes = [523.25, 659.25, 783.99, 1046.5];
@@ -1505,7 +1584,7 @@ export class HomeComponent implements OnInit, OnDestroy {
 
     // Alle Hauptbuttons starten das Spiel.
     const play = () => {
-      if (backPressed || this.isPulling() || this.isSpinning()) {
+      if (backPressed || this.isLaunchLocked()) {
         return;
       }
       this.onPlayPressed();
@@ -1607,6 +1686,10 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'Enter') {
+      if (this.gameSessionActive()) {
+        event.preventDefault();
+        return;
+      }
       this.onPlayPressed();
       event.preventDefault();
       return;
