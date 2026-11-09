@@ -1,14 +1,19 @@
 // main.js
 'use strict';
 
-const {app, BrowserWindow, globalShortcut} = require('electron');
+const {app, BrowserWindow, globalShortcut, Menu} = require('electron');
 const path = require('path');
 const {ipcMain} = require('electron');
 const {execFile, spawn} = require('child_process');
 const fs = require("node:fs/promises");
+const fsSync = require('node:fs');
 const { Server } = require('socket.io');
 const io = require('socket.io-client');
 const os = require('os');
+
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const isDev = !app.isPackaged;
 
@@ -31,17 +36,34 @@ process.on('uncaughtException', (error) => {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1280,
+    height: 720,
     fullscreen: true,
+    kiosk: true,
+    frame: false,
+    autoHideMenuBar: true,
+    focusable: true,
+    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      enableRemoteModule: false,
+      backgroundThrottling: false,
     }
   });
 
   mainWindow = win;
+  win.setMenuBarVisibility(false);
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.webContents.setBackgroundThrottling(false);
+
+  win.on('blur', () => {
+    scheduleClaimLauncherFocus();
+  });
+  win.on('leave-full-screen', () => {
+    if (holdLauncherFocus) {
+      scheduleClaimLauncherFocus();
+    }
+  });
   const productionIndex = path.join(__dirname, 'dist', 'angular20', 'browser', 'index.html');
 
   if (isDev) {
@@ -69,25 +91,8 @@ function createWindow() {
     win.loadFile(productionIndex);
   }
   
-  // Close game when window closes
   win.on('close', () => {
-    // Close the game process if running
-    if (gameProcess) {
-      console.log('Window closing - closing game process');
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-      } else {
-        gameProcess.kill('SIGTERM');
-      }
-      gameProcess = null;
-    }
-    
-    // Notify the other PC to close their game
-    if (isClient && clientSocket && clientSocket.connected) {
-      clientSocket.emit('closeGame');
-    } else if (isServer && serverSocket) {
-      serverSocket.sockets.emit('closeGame');
-    }
+    requestCloseGameSession();
   });
   
   return win;
@@ -96,6 +101,12 @@ function createWindow() {
 let serverSocket;
 let clientSocket;
 let gameProcess = null;
+/** Keep the launcher in the foreground unless a game is running. */
+let holdLauncherFocus = true;
+let claimFocusTimer = null;
+let gameLaunchStartedAt = 0;
+let gameEndHandled = false;
+let gameSessionActive = false;
 let isServer = false;
 let isClient = false;
 let connectionStatus = 'disconnected'; // disconnected, server, client
@@ -104,6 +115,9 @@ let mainWindow = null;
 let processMonitorInterval = null;
 /** Client wartet auf slotSpin-Antwort fuer lokalen Hebelzug (kein zweites slotSpinBegin). */
 let clientSpinAwaitingInvoke = false;
+/** Blocks a second slot spin until launch/return (spin + countdown + client wait). */
+let slotSpinLockedUntil = 0;
+let autoConnectInFlight = null;
 
 const SERVER_IP = '192.168.10.1';
 const CLIENT_IP = '192.168.10.2';
@@ -111,14 +125,29 @@ const SOCKET_PORT = 4203;
 
 function getLocalIPv4() {
   const nets = os.networkInterfaces();
+  const addresses = [];
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
+      const family = net.family === 'IPv4' || net.family === 4;
+      if (family && !net.internal) {
+        addresses.push(net.address);
       }
     }
   }
-  return null;
+  if (addresses.includes(SERVER_IP)) {
+    return SERVER_IP;
+  }
+  if (addresses.includes(CLIENT_IP)) {
+    return CLIENT_IP;
+  }
+  return addresses[0] || null;
+}
+
+function getLinkedClientCount() {
+  if (isServer && serverSocket?.sockets?.sockets) {
+    return serverSocket.sockets.sockets.size;
+  }
+  return 0;
 }
 
 function getRoleByIP() {
@@ -126,6 +155,176 @@ function getRoleByIP() {
   if (ip === SERVER_IP) return 'server';
   if (ip === CLIENT_IP) return 'client';
   return 'unknown';
+}
+
+function scheduleClaimLauncherFocus() {
+  if (!holdLauncherFocus || gameSessionActive) {
+    return;
+  }
+  if (claimFocusTimer) {
+    clearTimeout(claimFocusTimer);
+  }
+  claimFocusTimer = setTimeout(() => {
+    claimFocusTimer = null;
+    claimLauncherFocus();
+  }, 80);
+}
+
+function claimLauncherFocus() {
+  if (!holdLauncherFocus || gameSessionActive || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    if (!mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(true);
+    }
+    if (typeof mainWindow.setKiosk === 'function') {
+      mainWindow.setKiosk(true);
+    }
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.show();
+    mainWindow.focus();
+    if (typeof mainWindow.moveTop === 'function') {
+      mainWindow.moveTop();
+    }
+    app.focus({ steal: true });
+  } catch (e) {
+    console.error('Failed to reclaim launcher focus:', e);
+  }
+}
+
+function releaseLauncherFocus() {
+  holdLauncherFocus = false;
+  if (claimFocusTimer) {
+    clearTimeout(claimFocusTimer);
+    claimFocusTimer = null;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    mainWindow.setAlwaysOnTop(false);
+    if (typeof mainWindow.setKiosk === 'function') {
+      mainWindow.setKiosk(false);
+    }
+    mainWindow.blur();
+    mainWindow.minimize();
+  } catch (e) {
+    console.error('Failed to release launcher focus:', e);
+  }
+}
+
+function notifyGameStarted() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    mainWindow.webContents.send('gameStarted');
+  } catch (e) {
+    console.error('Failed to send gameStarted to renderer:', e);
+  }
+}
+
+function notifyGameClosed() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    mainWindow.webContents.send('gameClosed');
+  } catch (e) {
+    console.error('Failed to send gameClosed to renderer:', e);
+  }
+}
+
+function isSlotSpinLocked() {
+  return gameSessionActive || !!gameProcess || Date.now() < slotSpinLockedUntil;
+}
+
+function lockSlotSpin() {
+  slotSpinLockedUntil = Date.now() + 25000;
+}
+
+function clearSlotSpinLock() {
+  slotSpinLockedUntil = 0;
+}
+
+function killGameProcessTree() {
+  if (!gameProcess) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(gameProcess.pid), '/F', '/T'], { stdio: 'ignore' });
+    } else {
+      gameProcess.kill('SIGTERM');
+    }
+  } catch (e) {
+    console.error('Failed to kill game process:', e);
+  }
+  gameProcess = null;
+}
+
+function restoreLauncherAfterGame() {
+  const wasActive = gameSessionActive || !!gameProcess || Date.now() < slotSpinLockedUntil;
+  gameSessionActive = false;
+  clearSlotSpinLock();
+  holdLauncherFocus = true;
+  claimLauncherFocus();
+  if (wasActive) {
+    notifyGameClosed();
+  }
+}
+
+function applyRemoteCloseGame() {
+  gameEndHandled = true;
+  if (processMonitorInterval) {
+    clearInterval(processMonitorInterval);
+    processMonitorInterval = null;
+  }
+  killGameProcessTree();
+  restoreLauncherAfterGame();
+}
+
+function emitCloseGameToPeer() {
+  if (isClient && clientSocket && clientSocket.connected) {
+    clientSocket.emit('closeGame');
+  } else if (isServer && serverSocket) {
+    serverSocket.sockets.emit('closeGame');
+  }
+}
+
+function requestCloseGameSession() {
+  if (!gameSessionActive && !gameProcess && Date.now() >= slotSpinLockedUntil) {
+    return;
+  }
+  gameEndHandled = true;
+  if (processMonitorInterval) {
+    clearInterval(processMonitorInterval);
+    processMonitorInterval = null;
+  }
+  killGameProcessTree();
+  emitCloseGameToPeer();
+  restoreLauncherAfterGame();
+}
+
+function spawnGameBatch(batchPath, role, workDir) {
+  if (process.platform === 'win32') {
+    return spawn('cmd.exe', ['/d', '/s', '/c', `call "${batchPath}" ${role}`], {
+      cwd: workDir,
+      detached: false,
+      windowsHide: false,
+    });
+  }
+  return spawn(batchPath, [role], {
+    cwd: workDir,
+    detached: false,
+  });
 }
 
 function notifyGameSelected(gameIndex) {
@@ -192,11 +391,15 @@ function attachSlotSpinHandlers(socket) {
     return;
   }
   socket.on('requestSlotSpin', () => {
+    if (isSlotSpinLocked()) {
+      return;
+    }
     const payload = generateSlotSpinPayload();
     if (!payload) {
       return;
     }
     console.log('Server: slot spin requested — index', payload.targetIndex, 'seed', payload.seed);
+    lockSlotSpin();
     notifySlotSpin(payload, true);
   });
 }
@@ -219,22 +422,7 @@ function attachClientPassiveSlotSpinListener() {
 
 // Helper function to close game and notify other PC
 function closeGameAndNotify() {
-  if (gameProcess) {
-    console.log('Closing game process due to window close');
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-    } else {
-      gameProcess.kill('SIGTERM');
-    }
-    gameProcess = null;
-  }
-  
-  // Notify the other PC
-  if (isClient && clientSocket && clientSocket.connected) {
-    clientSocket.emit('closeGame');
-  } else if (isServer && serverSocket) {
-    serverSocket.sockets.emit('closeGame');
-  }
+  requestCloseGameSession();
 }
 
 async function loadGamesConfig() {
@@ -263,6 +451,10 @@ async function loadGamesConfig() {
         console.warn('Skipping invalid game entry (missing name or path):', line);
         continue;
       }
+      if (/jumpandrun|superstickman|stickman/i.test(`${name} ${batchPath}`)) {
+        console.log('Skipping JumpAndRun (disabled in launcher):', name);
+        continue;
+      }
       parsed.push({
         name,
         batchPath,
@@ -278,11 +470,17 @@ async function loadGamesConfig() {
 
 // App Lifecycle
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   await loadGamesConfig();
   createWindow();
+  claimLauncherFocus();
   globalShortcut.register('Control+Shift+Q', () => {
     console.log('Ctrl+Shift+Q pressed - quitting');
     app.quit();
+  });
+  globalShortcut.register('Control+Shift+E', () => {
+    console.log('Ctrl+Shift+E pressed - ending game session');
+    requestCloseGameSession();
   });
 });
 app.on('window-all-closed', () => {
@@ -295,63 +493,36 @@ app.on('activate', () => {
 });
 
 ipcMain.on('launchGame', async (event, gameIndex) => {
-  // When called without a gameIndex, behave like \"random\" mode.
-  // When a specific index is provided, both PCs launch the same game.
-  if (isClient && clientSocket && clientSocket.connected) {
-    console.log('Client: sending launch command request to server with index:', gameIndex);
-    clientSocket.emit('launchGame', gameIndex);
-  } else if (isServer && serverSocket) {
-    const clientCount = serverSocket.sockets?.sockets?.size ?? 0;
-    if (clientCount === 0) {
-      notifyGameError(
-        'Kein zweiter Automat verbunden: Auf PC 1 (Server, 192.168.10.1) laeuft der Launcher, aber PC 2 (Client, 192.168.10.2) ist noch nicht verbunden. Bitte auch dort den Launcher starten und auf „verbunden“ warten, bevor ein Spiel gestartet wird.'
-      );
-      return;
-    }
-    if (!GAMES.length) {
-      console.error('No games configured in GAMES array');
-      return;
-    }
-    let indexToLaunch = gameIndex;
-    if (!Number.isInteger(indexToLaunch)) {
-      indexToLaunch = getRandomInt(0, GAMES.length);
-    }
-    if (indexToLaunch < 0 || indexToLaunch >= GAMES.length) {
-      console.error('Invalid game index for launchGame:', indexToLaunch);
-      return;
-    }
-    console.log(
-      'Server: launching game as server with index',
-      indexToLaunch,
-      'name:',
-      GAMES[indexToLaunch]?.name
-    );
-    notifyGameSelected(indexToLaunch);
-    launchGame(indexToLaunch);
-    // Broadcast to all clients so they launch the same game index
-    serverSocket.sockets.emit('launchGame', indexToLaunch);
-  } else {
-    console.log('Not connected - attempting auto-connect and launch (handled in renderer)');
+  if (gameSessionActive || gameProcess) {
+    console.warn('Ignoring launch — a game is already running');
+    return;
   }
+  if (!GAMES.length) {
+    await loadGamesConfig();
+  }
+  if (!GAMES.length) {
+    notifyGameError('Keine Spiele geladen. Bitte C:\\Dashboard\\Games\\games.txt pruefen.');
+    return;
+  }
+  let indexToLaunch = gameIndex;
+  if (!Number.isInteger(indexToLaunch)) {
+    indexToLaunch = getRandomInt(0, GAMES.length);
+  }
+  if (indexToLaunch < 0 || indexToLaunch >= GAMES.length) {
+    notifyGameError('Ungueltiger Spielindex. Bitte games.txt pruefen.');
+    return;
+  }
+  console.log('Launching locally with index', indexToLaunch, 'name:', GAMES[indexToLaunch]?.name);
+  notifyGameSelected(indexToLaunch);
+  launchGame(indexToLaunch);
 });
 
 ipcMain.on('closeGame', () => {
-  if (gameProcess) {
-    console.log('Closing game process');
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-    } else {
-      gameProcess.kill('SIGTERM');
-    }
-    gameProcess = null;
-  }
-  
-  // Notify the other PC
-  if (isClient && clientSocket && clientSocket.connected) {
-    clientSocket.emit('closeGame');
-  } else if (isServer && serverSocket) {
-    serverSocket.sockets.emit('closeGame');
-  }
+  requestCloseGameSession();
+});
+
+ipcMain.on('refocusLauncher', () => {
+  scheduleClaimLauncherFocus();
 });
 ipcMain.handle('createWsServer', async (event, port) => {
   try {
@@ -370,72 +541,9 @@ ipcMain.handle('createWsServer', async (event, port) => {
       console.log('New client connected');
       attachSlotSpinHandlers(cs);
 
-      cs.on('launchGame', (gameIndex) => {
-        if (!GAMES.length) {
-          console.error('No games configured in GAMES array');
-          return;
-        }
-        let indexToLaunch = gameIndex;
-        if (!Number.isInteger(indexToLaunch)) {
-          indexToLaunch = getRandomInt(0, GAMES.length);
-        }
-        if (indexToLaunch < 0 || indexToLaunch >= GAMES.length) {
-          console.error('Invalid game index requested by client:', indexToLaunch);
-          return;
-        }
-        console.log(
-          'Server: Launching game on server (batch file) with index',
-          indexToLaunch,
-          'name:',
-          GAMES[indexToLaunch]?.name
-        );
-        notifyGameSelected(indexToLaunch);
-        launchGame(indexToLaunch);
-        // Broadcast to all clients
-        serverSocket.sockets.emit('launchGame', indexToLaunch);
-      });
-      
       cs.on('closeGame', () => {
-        console.log('Server: Client requested game close - closing server game and notifying all clients');
-        if (gameProcess) {
-          try {
-            console.log('Server: Attempting to close game process with PID:', gameProcess.pid);
-            if (process.platform === 'win32') {
-              // On Windows, try kill first, then use taskkill as fallback
-              try {
-                gameProcess.kill('SIGTERM');
-                // Give it a moment, then force kill if still running
-                setTimeout(() => {
-                  if (gameProcess) {
-                    console.log('Server: Force killing game process with taskkill');
-                    spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                  }
-                }, 500);
-              } catch (e) {
-                console.log('Server: Using taskkill to close game');
-                spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-              }
-            } else {
-              gameProcess.kill('SIGTERM');
-              setTimeout(() => {
-                if (gameProcess) {
-                  gameProcess.kill('SIGKILL');
-                }
-              }, 1000);
-            }
-          } catch (e) {
-            console.error('Error closing game:', e);
-          }
-          gameProcess = null;
-          // Clear monitoring interval
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
-          }
-          console.log('Server: Game process closed');
-        }
-        // Broadcast to all clients (including the one that sent it, but that's okay)
-        serverSocket.sockets.emit('closeGame');
+        console.log('Server: Client requested game close');
+        applyRemoteCloseGame();
       });
       
       cs.on('disconnect', () => {
@@ -468,56 +576,11 @@ ipcMain.handle('connectWithUrl', async (event, url) => {
       console.log('Connected to server');
     });
     
-    clientSocket.on('launchGame', (gameIndex) => {
-      console.log('Client: received launchGame command - launching client batch with index', gameIndex);
-      notifyGameSelected(gameIndex);
-      launchGame(gameIndex);
-    });
-
     attachClientPassiveSlotSpinListener();
 
     clientSocket.on('closeGame', () => {
-      console.log('Client: received closeGame command - closing game');
-      if (gameProcess) {
-        try {
-          console.log('Client: Attempting to close game process with PID:', gameProcess.pid);
-          // Try to kill the process directly first
-          if (process.platform === 'win32') {
-            // On Windows, try kill first, then use taskkill as fallback
-            try {
-              gameProcess.kill('SIGTERM');
-              // Give it a moment, then force kill if still running
-              setTimeout(() => {
-                if (gameProcess) {
-                  console.log('Client: Force killing game process with taskkill');
-                  spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-                }
-              }, 500);
-            } catch (e) {
-              console.log('Client: Using taskkill to close game');
-              spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-            }
-          } else {
-            gameProcess.kill('SIGTERM');
-            setTimeout(() => {
-              if (gameProcess) {
-                gameProcess.kill('SIGKILL');
-              }
-            }, 1000);
-          }
-        } catch (e) {
-          console.error('Error closing game:', e);
-        }
-        gameProcess = null;
-        // Clear monitoring interval
-        if (processMonitorInterval) {
-          clearInterval(processMonitorInterval);
-          processMonitorInterval = null;
-        }
-        console.log('Client: Game process closed');
-      } else {
-        console.log('Client: No game process to close');
-      }
+      console.log('Client: received closeGame command');
+      applyRemoteCloseGame();
     });
     
     clientSocket.on('disconnect', () => {
@@ -560,7 +623,22 @@ ipcMain.handle('disconnect', async (event) => {
 });
 
 ipcMain.handle('getConnectionStatus', async () => {
-  return { status: connectionStatus, isServer, isClient };
+  const linkedClientCount = getLinkedClientCount();
+  const clientOnline = isClient && !!clientSocket?.connected;
+  let status = 'disconnected';
+  if (isServer) {
+    status = 'server';
+  } else if (clientOnline) {
+    status = 'client';
+  }
+  return {
+    status,
+    isServer,
+    isClient: clientOnline,
+    linkedClientCount,
+    pairReady: clientOnline || (isServer && linkedClientCount > 0),
+    gameSessionActive: gameSessionActive || !!gameProcess,
+  };
 });
 
 ipcMain.on('quitApp', () => {
@@ -573,28 +651,67 @@ ipcMain.handle('getLocalNetworkInfo', async () => {
   return { ip: ip || 'unknown', role };
 });
 
+function waitForExistingClient(serverUrl, timeoutMs) {
+  return new Promise((resolve) => {
+    if (clientSocket?.connected) {
+      resolve({ success: true, role: 'client', url: serverUrl });
+      return;
+    }
+    if (!clientSocket) {
+      resolve({ success: false, error: 'Nicht verbunden' });
+      return;
+    }
+    const onConnect = () => {
+      cleanup();
+      resolve({ success: true, role: 'client', url: serverUrl });
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({
+        success: false,
+        error:
+          'Verbindungs-Timeout (6 s): Dieser PC (192.168.10.2) hat innerhalb von 6 Sekunden keine Antwort vom Server-PC (192.168.10.1) auf Port 4203 erhalten. Bitte zuerst den Launcher auf dem Server-PC starten, LAN-Kabel pruefen und die Windows-Firewall fuer Port 4203 freigeben.'
+      });
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      clientSocket?.off('connect', onConnect);
+    };
+    clientSocket.once('connect', onConnect);
+  });
+}
+
 ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
+  if (autoConnectInFlight) {
+    return autoConnectInFlight;
+  }
+  autoConnectInFlight = doAutoConnect(targetUrl, port).finally(() => {
+    autoConnectInFlight = null;
+  });
+  return autoConnectInFlight;
+});
+
+async function doAutoConnect(targetUrl, port) {
   const portNum = parseInt(String(port), 10) || SOCKET_PORT;
   const roleByIP = getRoleByIP();
   const serverUrl = `http://${SERVER_IP}:${portNum}`;
 
+  if (isServer && serverSocket) {
+    return { success: true, role: 'server', port: portNum };
+  }
+  if (isClient && clientSocket?.connected) {
+    return { success: true, role: 'client', url: serverUrl };
+  }
+
   const setupClientListeners = () => {
-    clientSocket.on('connect', () => console.log('Connected to server'));
-    clientSocket.on('launchGame', (gameIndex) => {
-      console.log('Client: received launchGame with index', gameIndex);
-      notifyGameSelected(gameIndex);
-      launchGame(gameIndex);
+    clientSocket.on('connect', () => {
+      connectionStatus = 'client';
+      console.log('Connected to server');
     });
     attachClientPassiveSlotSpinListener();
     clientSocket.on('closeGame', () => {
-      if (gameProcess) {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-        } else {
-          gameProcess.kill('SIGTERM');
-        }
-        gameProcess = null;
-      }
+      console.log('Client: received closeGame');
+      applyRemoteCloseGame();
     });
     clientSocket.on('disconnect', () => { connectionStatus = 'disconnected'; });
     clientSocket.on('connect_error', (err) => console.error('Connection error:', err));
@@ -604,30 +721,9 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
     serverSocket.on('connection', (cs) => {
       console.log('New client connected');
       attachSlotSpinHandlers(cs);
-      cs.on('launchGame', (gameIndex) => {
-        if (!GAMES.length) return;
-        let idx = Number.isInteger(gameIndex) ? gameIndex : getRandomInt(0, GAMES.length);
-        if (idx < 0 || idx >= GAMES.length) return;
-        notifyGameSelected(idx);
-        launchGame(idx);
-        serverSocket.sockets.emit('launchGame', idx);
-      });
       cs.on('closeGame', () => {
-        if (gameProcess) {
-          try {
-            if (process.platform === 'win32') {
-              spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T'], { stdio: 'ignore' });
-            } else {
-              gameProcess.kill('SIGTERM');
-            }
-          } catch (e) {}
-          gameProcess = null;
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
-          }
-        }
-        serverSocket.sockets.emit('closeGame');
+        console.log('Server: client requested closeGame');
+        applyRemoteCloseGame();
       });
       cs.on('disconnect', () => console.log('Client disconnected'));
     });
@@ -649,11 +745,14 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
   }
 
   if (roleByIP === 'client') {
+    if (clientSocket) {
+      return waitForExistingClient(serverUrl, 6000);
+    }
     return new Promise((resolve) => {
       clientSocket = io(serverUrl, {
         reconnection: true,
         reconnectionDelay: 1000,
-        reconnectionAttempts: 5,
+        reconnectionAttempts: Infinity,
         timeout: 5000
       });
       isClient = true;
@@ -663,38 +762,14 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
 
       const onConnect = () => {
         clientSocket.off('connect', onConnect);
-        clientSocket.off('connect_error', onError);
         resolve({ success: true, role: 'client', url: serverUrl });
-      };
-      const onError = (err) => {
-        clientSocket.off('connect', onConnect);
-        clientSocket.off('connect_error', onError);
-        clientSocket.close();
-        clientSocket = null;
-        isClient = false;
-        connectionStatus = 'disconnected';
-        resolve({
-          success: false,
-          error:
-            'Verbindung fehlgeschlagen: ' +
-            (err?.message || 'Server (192.168.10.1) nicht erreichbar') +
-            '. Pruefen Sie, ob der Launcher auf PC 1 laeuft, ob beide PCs im gleichen Netz (192.168.10.x) sind und ob Port ' +
-            portNum +
-            ' in der Firewall erlaubt ist.'
-        });
       };
 
       clientSocket.once('connect', onConnect);
-      clientSocket.once('connect_error', onError);
 
       setTimeout(() => {
         if (clientSocket && !clientSocket.connected) {
           clientSocket.off('connect', onConnect);
-          clientSocket.off('connect_error', onError);
-          clientSocket.close();
-          clientSocket = null;
-          isClient = false;
-          connectionStatus = 'disconnected';
           resolve({
             success: false,
             error:
@@ -752,14 +827,18 @@ ipcMain.handle('autoConnect', async (event, targetUrl, port) => {
       createAsServer();
     }, 2500);
   });
-});
+}
 
 ipcMain.handle('getGames', async () => {
   return GAMES;
 });
 
 ipcMain.handle('beginRandomSpin', async () => {
+  if (isSlotSpinLocked()) {
+    return { error: 'Spiel laeuft bereits.' };
+  }
   if (isClient && clientSocket && clientSocket.connected) {
+    lockSlotSpin();
     clientSpinAwaitingInvoke = true;
     return new Promise((resolve) => {
       let settled = false;
@@ -771,6 +850,9 @@ ipcMain.handle('beginRandomSpin', async () => {
         clientSpinAwaitingInvoke = false;
         clearTimeout(timer);
         clientSocket.off('slotSpin', onSpin);
+        if (payload?.error) {
+          clearSlotSpinLock();
+        }
         resolve(payload);
       };
       const onSpin = (payload) => finish(payload);
@@ -786,142 +868,138 @@ ipcMain.handle('beginRandomSpin', async () => {
   }
 
   if (isServer) {
+    if (getLinkedClientCount() === 0) {
+      return {
+        error:
+          'Kein zweiter Automat verbunden: Bitte zuerst den Launcher auf PC 2 (192.168.10.2) starten und warten, bis die Verbindung steht.'
+      };
+    }
     const payload = generateSlotSpinPayload();
     if (!payload) {
       return { error: 'Keine Spiele geladen — Spin nicht moeglich.' };
     }
+    lockSlotSpin();
     notifySlotSpin(payload, false);
     return payload;
   }
 
-  const payload = generateSlotSpinPayload();
-  if (!payload) {
-    return { error: 'Keine Spiele geladen — Spin nicht moeglich.' };
-  }
-  return payload;
+  return {
+    error: 'Nicht verbunden: Bitte warten, bis beide Automaten verbunden sind.'
+  };
 });
 
-async function launchGame(gameIndex){
-  // Close existing game if running
-  if (gameProcess) {
-    console.log('Closing existing game before launching new one');
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', gameProcess.pid, '/F', '/T']);
-    } else {
-      gameProcess.kill('SIGTERM');
-    }
-    gameProcess = null;
+function handleLocalGameEnded() {
+  if (gameEndHandled) {
+    return;
+  }
+  gameEndHandled = true;
+  if (processMonitorInterval) {
+    clearInterval(processMonitorInterval);
+    processMonitorInterval = null;
+  }
+  const elapsed = gameLaunchStartedAt ? Date.now() - gameLaunchStartedAt : Infinity;
+  gameProcess = null;
+
+  if (elapsed < 3000) {
+    console.warn('start.bat exited after', elapsed, 'ms — keeping session (no start /wait?). Use Ctrl+Shift+E to return.');
+    notifyGameError(
+      'start.bat wurde sofort beendet (kein start /wait?). Das Spiel des Partners laeuft weiter. Ctrl+Shift+E bringt diesen Launcher zurueck.'
+    );
+    return;
   }
 
-  // Decide which batch/script to run based on current role and game index
-  let command;
-  let args = [];
+  emitCloseGameToPeer();
+  restoreLauncherAfterGame();
+}
 
-  if (process.platform === 'win32') {
-    if (!Number.isInteger(gameIndex) || gameIndex < 0 || gameIndex >= GAMES.length) {
-      console.error('Invalid game index for launchGame:', gameIndex);
-      notifyGameError('Invalid game configuration. Please check games.txt (index out of range).');
-      return;
-    }
-    const game = GAMES[gameIndex];
-    if (!game) {
-      console.error('No game configuration found for index:', gameIndex);
-      notifyGameError('No game found for the selected entry. Please check games.txt.');
-      return;
-    }
+async function launchGame(gameIndex){
+  if (gameSessionActive || gameProcess) {
+    console.warn('Ignoring launch — a game is already running');
+    return;
+  }
 
-    if (!game.batchPath) {
-      console.error('Batch path is not configured for game index', gameIndex);
-      notifyGameError('No start script configured for this game. Please check games.txt.');
-      return;
-    }
-
-    // Both PCs run the same start.bat for the selected game.
-    // One PC's start.bat should start the server version, the other PC's start.bat the client version.
-    console.log('Launching batch for game:', game.name, 'path:', game.batchPath, 'role:', isServer ? 'server' : (isClient ? 'client' : 'unknown'));
-    command = 'cmd.exe';
-    args = ['/c', game.batchPath];
-
-    if (!isServer && !isClient) {
-      console.error('Cannot launch game: instance is neither server nor client');
-      return;
-    }
-  } else {
+  if (process.platform !== 'win32') {
     console.error('Batch-file based launch is currently only implemented for Windows');
     return;
   }
 
-  gameProcess = spawn(command, args, {
-    detached: false
-  });
+  if (!Number.isInteger(gameIndex) || gameIndex < 0 || gameIndex >= GAMES.length) {
+    console.error('Invalid game index for launchGame:', gameIndex);
+    notifyGameError('Invalid game configuration. Please check games.txt (index out of range).');
+    return;
+  }
+  const game = GAMES[gameIndex];
+  if (!game) {
+    notifyGameError('No game found for the selected entry. Please check games.txt.');
+    return;
+  }
+  if (!game.batchPath) {
+    notifyGameError('No start script configured for this game. Please check games.txt.');
+    return;
+  }
+  if (!isServer && !isClient) {
+    console.error('Cannot launch game: instance is neither server nor client');
+    notifyGameError('Spielstart fehlgeschlagen: Dieser PC ist weder Server noch Client.');
+    return;
+  }
+
+  const batchPath = path.normalize(game.batchPath);
+  if (!fsSync.existsSync(batchPath)) {
+    notifyGameError(`Start-Skript nicht gefunden: ${batchPath}`);
+    return;
+  }
+
+  const workDir = path.dirname(batchPath);
+  const role = isServer ? 'server' : 'client';
+  console.log('Launching batch for game:', game.name, 'path:', batchPath, 'role:', role);
+
+  gameSessionActive = true;
+  gameEndHandled = false;
+  notifyGameStarted();
+  releaseLauncherFocus();
+
+  if (role === 'client') {
+    console.log('Client: waiting 5s so the host game can listen first...');
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    if (!gameSessionActive || gameEndHandled) {
+      console.warn('Launch aborted after client wait — session already closed');
+      return;
+    }
+  }
+
+  gameLaunchStartedAt = Date.now();
+  gameProcess = spawnGameBatch(batchPath, role, workDir);
   console.log('Launched game process with PID:', gameProcess.pid);
-  
+
   gameProcess.on('error', (error) => {
     console.error("Error running executable:", error);
     notifyGameError(error?.message || 'Could not start the game process. Please check the start.bat path.');
     gameProcess = null;
+    gameEndHandled = true;
+    restoreLauncherAfterGame();
   });
-  
+
   gameProcess.on('exit', (code, signal) => {
     console.log(`Game process exited with code ${code} and signal ${signal}`);
-    const wasGameProcess = gameProcess;
-    gameProcess = null;
-    
-    // Clear monitoring interval
-    if (processMonitorInterval) {
+    handleLocalGameEnded();
+  });
+
+  if (processMonitorInterval) {
+    clearInterval(processMonitorInterval);
+  }
+  processMonitorInterval = setInterval(() => {
+    if (!gameProcess) {
       clearInterval(processMonitorInterval);
       processMonitorInterval = null;
+      return;
     }
-    
-    // Notify the other PC that game closed
-    if (isClient && clientSocket && clientSocket.connected) {
-      console.log('Client: Game closed - notifying server');
-      clientSocket.emit('closeGame');
-    } else if (isServer && serverSocket) {
-      console.log('Server: Game closed - notifying all clients');
-      serverSocket.sockets.emit('closeGame');
+    try {
+      process.kill(gameProcess.pid, 0);
+    } catch (e) {
+      console.log('Game process no longer exists (detected by monitor)');
+      handleLocalGameEnded();
     }
-  });
-  
-  // Monitor process on Windows - check if game process still exists
-  if (process.platform === 'win32') {
-    // Clear any existing monitor
-    if (processMonitorInterval) {
-      clearInterval(processMonitorInterval);
-    }
-    
-    processMonitorInterval = setInterval(() => {
-      if (gameProcess) {
-        try {
-          // Try to check if process exists - on Windows, this throws if process doesn't exist
-          process.kill(gameProcess.pid, 0);
-        } catch (e) {
-          // Process doesn't exist - game was closed externally
-          console.log('Game process no longer exists (detected by monitor) - notifying other PC');
-          const wasGameProcess = gameProcess;
-          gameProcess = null;
-          if (processMonitorInterval) {
-            clearInterval(processMonitorInterval);
-            processMonitorInterval = null;
-          }
-          
-          // Notify the other PC to close their game
-          if (isClient && clientSocket && clientSocket.connected) {
-            console.log('Client: Game closed externally - notifying server');
-            clientSocket.emit('closeGame');
-          } else if (isServer && serverSocket) {
-            console.log('Server: Game closed externally - notifying all clients');
-            serverSocket.sockets.emit('closeGame');
-          }
-        }
-      } else {
-        if (processMonitorInterval) {
-          clearInterval(processMonitorInterval);
-          processMonitorInterval = null;
-        }
-      }
-    }, 300); // Check every 300ms for faster detection
-  }
+  }, 300);
 }
 
 

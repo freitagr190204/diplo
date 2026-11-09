@@ -1,0 +1,2 @@
+Pacman;C:\Dashboard\Games\Pacman\start.bat;C:\Dashboard\Games\Pacman\cover.jpg
+Spacegame;C:\Dashboard\Games\Spacegame\start.bat;C:\Dashboard\Games\Spacegame\cover.jpg

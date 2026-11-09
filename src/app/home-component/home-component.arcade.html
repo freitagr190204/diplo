@@ -111,7 +111,7 @@
       <p class="machine-note" *ngIf="!fairMode()">Der Automat waehlt ein Spiel fuer beide Stationen (nur im Zufallsmodus).</p>
     </section>
 
-    <section class="right-zone">
+    <section class="right-zone" *ngIf="!fairMode()">
       <h2>SPIELAUSWAHL</h2>
       <div class="right-zone__body">
         <div class="game-grid" [class.game-grid--dimmed]="showPickReveal()" [class.game-grid--spinning]="isSpinning()">
@@ -133,19 +133,6 @@
           </button>
         </div>
 
-        <div class="pick-reveal" *ngIf="showPickReveal() && slotResultGame() as picked">
-          <div class="pick-reveal__card">
-            <div class="pick-reveal__image" *ngIf="gameImageUrl(picked) && !imageBroken(picked); else pickFallback">
-              <img [src]="gameImageUrl(picked)!" [alt]="picked.name" (error)="onGameImageError(picked)" />
-            </div>
-            <ng-template #pickFallback>
-              <div class="pick-reveal__fallback">{{ picked.name.charAt(0) }}</div>
-            </ng-template>
-            <h3 class="pick-reveal__title">Spiel ausgewählt</h3>
-            <p class="pick-reveal__name">{{ picked.name }}</p>
-            <div class="pick-reveal__countdown" *ngIf="launchCountdown() !== null">{{ launchCountdown() }}</div>
-          </div>
-        </div>
       </div>
     </section>
   </main>
@@ -163,5 +150,40 @@
   </div>
 
   <div class="error-banner" *ngIf="gameError()">{{ gameErrorText() }}</div>
-  <div class="mock-banner" *ngIf="usingMockData()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
+  <div class="mock-banner" *ngIf="usingMockData() && !fairMode()">Demo-Modus: Spin und Countdown laufen — es wird kein echtes Spiel gestartet</div>
+
+  <div class="session-overlay" *ngIf="!usingMockData() && games().length === 0 && !gameSessionActive()">
+    <div class="session-overlay__card">
+      <p class="session-overlay__title">Keine Spiele geladen</p>
+      <p class="session-overlay__text">Bitte C:\Dashboard\Games\games.txt auf beiden PCs prüfen.</p>
+    </div>
+  </div>
+
+  <div class="session-overlay" *ngIf="!usingMockData() && games().length > 0 && !isPairReady() && !gameSessionActive()">
+    <div class="session-overlay__card">
+      <p class="session-overlay__title">Warte auf zweiten Automaten</p>
+      <p class="session-overlay__text">{{ statusMessage() }}</p>
+    </div>
+  </div>
+
+  <div class="session-overlay session-overlay--pick" *ngIf="showPickReveal() && slotResultGame() as picked">
+    <div class="session-overlay__card">
+      <div class="pick-reveal__image" *ngIf="gameImageUrl(picked) && !imageBroken(picked); else pickFallback">
+        <img [src]="gameImageUrl(picked)!" [alt]="picked.name" (error)="onGameImageError(picked)" />
+      </div>
+      <ng-template #pickFallback>
+        <div class="pick-reveal__fallback">{{ picked.name.charAt(0) }}</div>
+      </ng-template>
+      <p class="session-overlay__title">Spiel ausgewählt</p>
+      <p class="session-overlay__text">{{ picked.name }}</p>
+      <div class="pick-reveal__countdown" *ngIf="launchCountdown() !== null">{{ launchCountdown() }}</div>
+    </div>
+  </div>
+
+  <div class="session-overlay" *ngIf="showReturnOverlay()">
+    <div class="session-overlay__card">
+      <p class="session-overlay__title">Bereit für das nächste Duo</p>
+      <p class="session-overlay__text">Zieht den Hebel, um das nächste Spiel zu starten.</p>
+    </div>
+  </div>
 </div>

@@ -40,6 +40,9 @@ export class HomeComponent implements OnInit, OnDestroy {
   serverUrl = signal('192.168.10.1:4203');
   serverPort = signal('4203');
   connectionRole = signal<'server' | 'client' | 'disconnected'>('disconnected');
+  linkedClientCount = signal(0);
+  gameSessionActive = signal(false);
+  showReturnOverlay = signal(false);
   statusMessage = signal('Nicht verbunden');
   localIp = signal<string | null>(null);
   localRole = signal<'server' | 'client' | 'unknown'>('unknown');
@@ -111,11 +114,32 @@ export class HomeComponent implements OnInit, OnDestroy {
   private carouselSpinStartAt = 0;
   private carouselSpinTargetIndex = 0;
   private lastCarouselStepAt = 0;
+  private gamepadInterval: ReturnType<typeof setInterval> | null = null;
+  private returnOverlayTimeout: ReturnType<typeof setTimeout> | null = null;
+  private spinRequestPending = false;
+  private readonly onWindowBlur = () => {
+    if (!this.gameSessionActive()) {
+      window.api?.refocusLauncher?.();
+    }
+  };
+  private readonly onWindowFocus = () => {
+    this.startGamepadLoop();
+  };
+  private readonly onVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      if (!this.gameSessionActive()) {
+        window.api?.refocusLauncher?.();
+      }
+      this.startGamepadLoop();
+    }
+  };
   constructor() {
     effect(() => {
       const role = this.connectionRole();
       if (role === 'server') {
-        this.statusMessage.set('Warte auf zweiten Automaten...');
+        this.statusMessage.set(
+          this.linkedClientCount() > 0 ? 'Client verbunden — bereit' : 'Warte auf zweiten Automaten...'
+        );
       } else if (role === 'client') {
         this.statusMessage.set('Mit Server verbunden');
       } else {
@@ -125,16 +149,42 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
-    this.fairMode.set(this.route.snapshot.data['fairMode'] === true);
+    const isFair = this.route.snapshot.data['fairMode'] === true;
+    this.fairMode.set(isFair);
+    if (isFair) {
+      this.mode.set('random');
+    }
     this.checkConnectionStatus();
     this.statusCheckInterval = setInterval(() => {
       this.checkConnectionStatus();
     }, 1000);
     this.loadGames();
     this.loadLocalNetworkInfo().then(() => {
+      void this.autoConnect();
       this.startClientAutoConnect();
     });
     this.startGamepadLoop();
+    window.addEventListener('blur', this.onWindowBlur);
+    window.addEventListener('focus', this.onWindowFocus);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+    // @ts-ignore
+    if (window.api?.onGameStarted) {
+      // @ts-ignore
+      window.api.onGameStarted(() => {
+        this.gameSessionActive.set(true);
+        this.showPickReveal.set(false);
+        this.launchCountdown.set(null);
+      });
+    }
+
+    // @ts-ignore
+    if (window.api?.onGameClosed) {
+      // @ts-ignore
+      window.api.onGameClosed(() => {
+        this.onGameSessionClosed();
+      });
+    }
 
     // Listen for game selection events from Electron (random or manual, server or client)
     // @ts-ignore
@@ -176,7 +226,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           }
           return;
         }
-        if (this.isSpinning() || this.isPulling() || this.launchCountdown() !== null) {
+        if (this.gameSessionActive() || this.isSpinning() || this.isPulling() || this.launchCountdown() !== null) {
           return;
         }
         if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
@@ -211,7 +261,14 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
     this.stopTickSound();
     this.clearLeverTimeouts();
+    if (this.returnOverlayTimeout) {
+      clearTimeout(this.returnOverlayTimeout);
+      this.returnOverlayTimeout = null;
+    }
     this.stopGamepadLoop();
+    window.removeEventListener('blur', this.onWindowBlur);
+    window.removeEventListener('focus', this.onWindowFocus);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   private async checkConnectionStatus() {
@@ -223,6 +280,10 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.isConnected.set(status.status !== 'disconnected');
         this.hasServer.set(status.isServer);
         this.isClient.set(status.isClient);
+        this.linkedClientCount.set(status.linkedClientCount ?? 0);
+        if (typeof status.gameSessionActive === 'boolean') {
+          this.gameSessionActive.set(status.gameSessionActive);
+        }
       }
     } catch (e) {
       console.error('Error checking status:', e);
@@ -234,18 +295,31 @@ export class HomeComponent implements OnInit, OnDestroy {
       // @ts-ignore
       const games = await window.api.getGames();
       if (Array.isArray(games)) {
-        if (games.length > 0) {
-          this.games.set([...games]);
+        const playable = games.filter(
+          (g) => !/jumpandrun|superstickman|stickman/i.test(`${g.name} ${g.batchPath}`)
+        );
+        if (playable.length > 0) {
+          this.games.set(playable);
           this.usingMockData.set(false);
           this.selectedGameIndex.set(0);
           this.setupReels();
+        } else if (this.fairMode()) {
+          this.games.set([]);
+          this.usingMockData.set(false);
+          this.gameError.set('Keine Spiele geladen. Bitte C:\\Dashboard\\Games\\games.txt pruefen.');
         } else {
           this.loadMockGames();
         }
       }
     } catch (e) {
       console.error('Error loading games:', e);
-      this.loadMockGames();
+      if (this.fairMode()) {
+        this.games.set([]);
+        this.usingMockData.set(false);
+        this.gameError.set('Keine Spiele geladen. Bitte C:\\Dashboard\\Games\\games.txt pruefen.');
+      } else {
+        this.loadMockGames();
+      }
     }
   }
 
@@ -280,20 +354,15 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private startClientAutoConnect() {
-    if (this.localRole() !== 'client' || this.isConnected()) return;
-    this.autoConnect().then(() => {
-      if (!this.isConnected()) {
-        this.clientRetryInterval = setInterval(() => {
-          if (this.isConnected()) {
-            clearInterval(this.clientRetryInterval);
-            this.clientRetryInterval = null;
-            return;
-          }
-          this.statusMessage.set('Verbinden... (erneut)');
-          this.autoConnect();
-        }, 5000);
+    if (this.clientRetryInterval) {
+      return;
+    }
+    this.clientRetryInterval = setInterval(() => {
+      if (this.gameSessionActive() || this.isPairReady()) {
+        return;
       }
-    });
+      void this.autoConnect();
+    }, 4000);
   }
 
   protected connectionStatusLabel() {
@@ -310,14 +379,14 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected setMode(mode: 'random' | 'manual') {
-    if (this.isSpinning() || this.isPulling()) {
+    if (this.fairMode() || this.isSpinning() || this.isPulling()) {
       return;
     }
     this.mode.set(mode);
   }
 
   protected selectGame(index: number) {
-    if (this.isSpinning() || this.isPulling()) {
+    if (this.fairMode() || this.isSpinning() || this.isPulling()) {
       return;
     }
     if (index >= 0 && index < this.games().length) {
@@ -325,12 +394,29 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
   }
 
+  protected isPairReady() {
+    if (this.usingMockData()) {
+      return true;
+    }
+    const role = this.connectionRole();
+    if (role === 'client') {
+      return this.isConnected();
+    }
+    if (role === 'server') {
+      return this.linkedClientCount() > 0;
+    }
+    return false;
+  }
+
   protected canLaunchRandom() {
     return (
       this.games().length > 0 &&
+      !this.gameSessionActive() &&
+      !this.spinRequestPending &&
       !this.isSpinning() &&
       !this.isPulling() &&
-      this.launchCountdown() === null
+      this.launchCountdown() === null &&
+      this.isPairReady()
     );
   }
 
@@ -338,20 +424,38 @@ export class HomeComponent implements OnInit, OnDestroy {
     return (
       this.games().length > 0 &&
       this.selectedGameIndex() !== null &&
+      !this.gameSessionActive() &&
+      !this.spinRequestPending &&
       !this.isSpinning() &&
       !this.isPulling() &&
-      this.launchCountdown() === null
+      this.launchCountdown() === null &&
+      this.isPairReady()
     );
   }
 
   protected async onPlayPressed() {
-    if (this.isSpinning() || this.isPulling() || this.launchCountdown() !== null) {
+    if (
+      this.gameSessionActive() ||
+      this.spinRequestPending ||
+      this.isSpinning() ||
+      this.isPulling() ||
+      this.launchCountdown() !== null
+    ) {
       return;
     }
 
     if (!this.usingMockData() && !this.isConnected()) {
       await this.autoConnect();
       await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (!this.usingMockData() && !this.isPairReady()) {
+      this.gameError.set(
+        this.formatConnectionError(
+          'Kein zweiter Automat verbunden. Bitte warten, bis beide Launcher verbunden sind.'
+        )
+      );
+      return;
     }
 
     const currentMode = this.mode();
@@ -394,7 +498,21 @@ export class HomeComponent implements OnInit, OnDestroy {
    * Controller-driven: image frames idle → middle → down → (mech) → spin, then idle photo again.
    */
   private startLeverPullSequence() {
-    if (this.isPulling() || this.isSpinning() || this.launchCountdown() !== null) {
+    if (
+      this.gameSessionActive() ||
+      this.spinRequestPending ||
+      this.isPulling() ||
+      this.isSpinning() ||
+      this.launchCountdown() !== null
+    ) {
+      return;
+    }
+    if (!this.usingMockData() && !this.isPairReady()) {
+      this.gameError.set(
+        this.formatConnectionError(
+          'Kein zweiter Automat verbunden. Bitte warten, bis beide Launcher verbunden sind.'
+        )
+      );
       return;
     }
     if (this.mode() !== 'random' || this.games().length === 0) {
@@ -426,7 +544,14 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private startRemoteLeverAndSpin(payload: {targetIndex: number; seed: number}) {
-    if (this.mode() !== 'random' || this.games().length === 0) {
+    if (
+      this.gameSessionActive() ||
+      this.isSpinning() ||
+      this.isPulling() ||
+      this.launchCountdown() !== null ||
+      this.mode() !== 'random' ||
+      this.games().length === 0
+    ) {
       return;
     }
     this.clearLeverTimeouts();
@@ -450,25 +575,35 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private async requestSyncedRandomSpin() {
+    if (this.spinRequestPending || this.isSpinning() || this.gameSessionActive()) {
+      return;
+    }
     if (this.usingMockData()) {
       this.gameError.set(null);
       this.runSyncedSpinLocalFallback();
       return;
     }
 
-    const payload: SlotSpinPayload | null = window.api?.beginRandomSpin
-      ? await window.api.beginRandomSpin()
-      : null;
-    if (!payload) {
-      this.runSyncedSpinLocalFallback();
-      return;
-    }
-    if (payload.error) {
-      this.gameError.set(this.formatConnectionError(payload.error));
-      return;
-    }
-    if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
-      this.runSyncedSpin({targetIndex: payload.targetIndex, seed: payload.seed});
+    this.spinRequestPending = true;
+    try {
+      const payload: SlotSpinPayload | null = window.api?.beginRandomSpin
+        ? await window.api.beginRandomSpin()
+        : null;
+      if (!payload) {
+        this.gameError.set(
+          this.formatConnectionError('Nicht verbunden: Bitte warten, bis beide Automaten verbunden sind.')
+        );
+        return;
+      }
+      if (payload.error) {
+        this.gameError.set(this.formatConnectionError(payload.error));
+        return;
+      }
+      if (typeof payload.targetIndex === 'number' && typeof payload.seed === 'number') {
+        this.runSyncedSpin({targetIndex: payload.targetIndex, seed: payload.seed});
+      }
+    } finally {
+      this.spinRequestPending = false;
     }
   }
 
@@ -530,7 +665,7 @@ export class HomeComponent implements OnInit, OnDestroy {
         'Bitte zuerst den Launcher auf PC 1 starten, dann PC 2. Pruefen Sie IP-Adressen (10.1 / 10.2) und die Firewall.'
       );
     }
-    if (/Kein Client verbunden/i.test(t)) {
+    if (/Kein Client verbunden|Kein zweiter Automat/i.test(t)) {
       return (
         'Kein zweiter Automat verbunden: Auf PC 1 (Server) laeuft der Launcher, aber PC 2 (Client) ist noch nicht verbunden. ' +
         'Bitte auch auf 192.168.10.2 den Launcher starten und warten, bis die Verbindung steht.'
@@ -674,7 +809,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private runSyncedSpin(payload: {targetIndex: number; seed: number}): boolean {
-    if (this.isSpinning()) {
+    if (this.isSpinning() || this.gameSessionActive() || this.launchCountdown() !== null) {
       return false;
     }
 
@@ -964,7 +1099,34 @@ export class HomeComponent implements OnInit, OnDestroy {
     return topRow * h;
   }
 
+  private onGameSessionClosed() {
+    this.gameSessionActive.set(false);
+    this.showPickReveal.set(false);
+    this.launchCountdown.set(null);
+    this.isSpinning.set(false);
+    this.isPulling.set(false);
+    this.slotResultGame.set(null);
+    this.currentGameName.set(null);
+    this.spinRequestPending = false;
+    this.clearLeverTimeouts();
+    if (this.launchCountdownInterval) {
+      clearInterval(this.launchCountdownInterval);
+      this.launchCountdownInterval = null;
+    }
+    this.showReturnOverlay.set(true);
+    if (this.returnOverlayTimeout) {
+      clearTimeout(this.returnOverlayTimeout);
+    }
+    this.returnOverlayTimeout = setTimeout(() => {
+      this.showReturnOverlay.set(false);
+      this.returnOverlayTimeout = null;
+    }, 2800);
+  }
+
   private startLaunchCountdown(gameIndex: number) {
+    if (this.gameSessionActive()) {
+      return;
+    }
     if (this.launchCountdownInterval) {
       clearInterval(this.launchCountdownInterval);
       this.launchCountdownInterval = null;
@@ -983,7 +1145,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           clearInterval(this.launchCountdownInterval);
           this.launchCountdownInterval = null;
         }
-        if (!this.usingMockData()) {
+        if (!this.usingMockData() && !this.gameSessionActive()) {
           // @ts-ignore
           window.api.launchGameByIndex(gameIndex);
         }
@@ -1108,16 +1270,10 @@ export class HomeComponent implements OnInit, OnDestroy {
       } else {
         const msg = result?.error || 'Verbindung fehlgeschlagen';
         this.statusMessage.set(msg);
-        this.gameError.set(this.formatConnectionError(msg));
       }
     } catch (e) {
       console.error('Auto-connect error:', e);
       this.statusMessage.set('Verbindung fehlgeschlagen');
-      this.gameError.set(
-        this.formatConnectionError(
-          'Verbindung fehlgeschlagen: Unerwarteter Fehler beim Verbindungsaufbau. Netzwerk und Firewall pruefen.'
-        )
-      );
     }
   }
 
@@ -1152,7 +1308,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   protected closeGame() {
-    if (this.usingMockData()) {
+    if (this.usingMockData() || !this.gameSessionActive()) {
       return;
     }
     // @ts-ignore
@@ -1172,20 +1328,26 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   private startGamepadLoop() {
-    if (this.animationFrameId !== null) {
-      return;
-    }
-    const loop = () => {
-      this.readGamepad();
+    if (this.animationFrameId === null) {
+      const loop = () => {
+        this.readGamepad();
+        this.animationFrameId = window.requestAnimationFrame(loop);
+      };
       this.animationFrameId = window.requestAnimationFrame(loop);
-    };
-    this.animationFrameId = window.requestAnimationFrame(loop);
+    }
+    if (this.gamepadInterval === null) {
+      this.gamepadInterval = setInterval(() => this.readGamepad(), 50);
+    }
   }
 
   private stopGamepadLoop() {
     if (this.animationFrameId !== null) {
       window.cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+    if (this.gamepadInterval !== null) {
+      clearInterval(this.gamepadInterval);
+      this.gamepadInterval = null;
     }
   }
 
@@ -1197,7 +1359,6 @@ export class HomeComponent implements OnInit, OnDestroy {
     const pads = (nav.getGamepads() as (Gamepad | null)[])
       .filter((p): p is Gamepad => !!p && p.connected);
     if (!pads.length) {
-      this.lastButtonStates = {};
       return;
     }
 
@@ -1237,7 +1398,9 @@ export class HomeComponent implements OnInit, OnDestroy {
     if (isComboPressedOnAnyPad(8, 4)) {
       if (!this.lastBackLbPressed) {
         this.lastBackLbPressed = true;
-        this.closeGame();
+        if (this.gameSessionActive()) {
+          this.closeGame();
+        }
       }
     } else {
       this.lastBackLbPressed = false;
@@ -1245,7 +1408,7 @@ export class HomeComponent implements OnInit, OnDestroy {
 
     // Alle Hauptbuttons starten das Spiel.
     const play = () => {
-      if (backPressed || this.isPulling() || this.isSpinning()) {
+      if (backPressed || this.gameSessionActive() || this.isPulling() || this.isSpinning()) {
         return;
       }
       this.onPlayPressed();
@@ -1256,7 +1419,10 @@ export class HomeComponent implements OnInit, OnDestroy {
     handleButtonEdgeAny(3, play);
     handleButtonEdgeAny(9, play);
 
-    // D‑Pad – Mode (left/right) und Spielauswahl (up/down)
+    // D‑Pad – Mode (left/right) und Spielauswahl (up/down); Messemodus bleibt Slot-only.
+    if (this.fairMode()) {
+      return;
+    }
     handleButtonEdgeAny(14, () => {
       const nextMode = this.mode() === 'random' ? 'manual' : 'random';
       this.setMode(nextMode);
@@ -1320,7 +1486,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'ArrowLeft' || key === 'ArrowRight') {
-      if (this.isSpinning() || this.isPulling()) {
+      if (this.fairMode() || this.isSpinning() || this.isPulling()) {
         return;
       }
       const nextMode = this.mode() === 'random' ? 'manual' : 'random';
@@ -1330,7 +1496,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'ArrowUp' || key === 'ArrowDown') {
-      if (this.isSpinning() || this.isPulling()) {
+      if (this.fairMode() || this.isSpinning() || this.isPulling()) {
         return;
       }
       if (this.mode() === 'manual' && this.games().length > 0) {
@@ -1345,13 +1511,17 @@ export class HomeComponent implements OnInit, OnDestroy {
     }
 
     if (key === 'Enter') {
-      this.onPlayPressed();
+      if (!this.gameSessionActive()) {
+        this.onPlayPressed();
+      }
       event.preventDefault();
       return;
     }
 
     if (key === 'Escape') {
-      this.closeGame();
+      if (this.gameSessionActive()) {
+        this.closeGame();
+      }
       event.preventDefault();
     }
   }

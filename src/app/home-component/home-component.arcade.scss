@@ -9,7 +9,7 @@
   flex-direction: column;
   gap: 12px;
   overflow: hidden;
-  cursor: none;
+  cursor: default;
   user-select: none;
   color: #fff;
   font-family: "Segoe UI", Inter, sans-serif;
@@ -769,6 +769,10 @@
   text-shadow: 0 0 24px rgba(0, 234, 255, 0.65);
 }
 
+.arcade-shell--fair .arcade-main {
+  grid-template-columns: 1fr;
+}
+
 .arcade-shell--fair .left-zone__machine-row {
   grid-template-columns: 1fr;
 }
@@ -847,6 +851,8 @@
 }
 
 .error-banner {
+  position: relative;
+  z-index: 55;
   text-align: center;
   border-radius: 10px;
   border: 1px solid rgba(255, 112, 112, 0.7);
@@ -864,6 +870,46 @@
   border-radius: 8px;
   padding: 4px 8px;
   flex: 0 0 auto;
+}
+
+.session-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 4, 20, 0.72);
+  pointer-events: auto;
+}
+
+.session-overlay--pick {
+  z-index: 45;
+}
+
+.session-overlay__card {
+  min-width: 520px;
+  max-width: 80vw;
+  padding: 28px 36px;
+  border-radius: 18px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(42, 18, 78, 0.96), rgba(16, 8, 36, 0.96));
+  border: 2px solid rgba(0, 234, 255, 0.55);
+  box-shadow: 0 0 40px rgba(0, 234, 255, 0.25);
+}
+
+.session-overlay__title {
+  margin: 0 0 10px;
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-overlay__text {
+  margin: 0;
+  font-size: 22px;
+  color: #9befff;
 }
 
 @keyframes embedShake {
